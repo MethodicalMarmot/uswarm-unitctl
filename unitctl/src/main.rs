@@ -1,17 +1,24 @@
 mod config;
 mod context;
 mod mavlink;
+mod sensors;
 
 use std::sync::Arc;
-use std::time::Duration;
 
+use crate::mavlink::drone_component::DroneComponent;
+use crate::mavlink::sniffer_component::MavlinkSniffer;
+use crate::mavlink::telemetry_reporter::TelemetryReporter;
 use clap::Parser;
+use config::Cli;
+use context::Context;
+use sensors::SensorManager;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use config::Cli;
-use context::Context;
+pub trait Task: Send + Sync {
+    fn run(self: Arc<Self>) -> Vec<tokio::task::JoinHandle<()>>;
+}
 
 #[tokio::main]
 async fn main() {
@@ -61,86 +68,33 @@ async fn main() {
         cancel_signal.cancel();
     });
 
-    // Spawn drone component (outgoing message sender)
-    let drone_cancel = cancel.clone();
-    let drone_ctx = Arc::clone(&ctx);
-    let drone_handle = tokio::spawn(async move {
-        mavlink::drone::run(drone_ctx, drone_cancel).await;
-    });
-    info!("drone component started");
+    let mut handles = vec![];
 
-    // Spawn drone heartbeat loop
-    let drone_hb_cancel = cancel.clone();
-    let drone_hb_ctx = Arc::clone(&ctx);
-    let drone_hb_handle = tokio::spawn(async move {
-        mavlink::drone::heartbeat_loop(drone_hb_ctx, drone_hb_cancel).await;
-    });
-    info!("drone heartbeat loop started");
+    let sensor_manager = Arc::new(SensorManager::new(
+        Arc::clone(&ctx),
+        cancel.clone(),
+        &ctx.config.sensors,
+    ));
+    handles.extend(sensor_manager.run());
 
-    // Spawn sniffer (incoming message receiver)
-    let sniffer_cancel = cancel.clone();
-    let sniffer_ctx = Arc::clone(&ctx);
-    let sniffer_handle = tokio::spawn(async move {
-        mavlink::sniffer::run(sniffer_ctx, sniffer_cancel).await;
-    });
-    info!("sniffer started");
+    let drone_component = Arc::new(DroneComponent::new(Arc::clone(&ctx), cancel.clone()));
+    handles.extend(drone_component.run());
 
-    // Spawn sniffer heartbeat loop
-    let sniffer_hb_cancel = cancel.clone();
-    let sniffer_hb_ctx = Arc::clone(&ctx);
-    let sniffer_hb_handle = tokio::spawn(async move {
-        mavlink::sniffer::heartbeat_loop(sniffer_hb_ctx, sniffer_hb_cancel).await;
-    });
-    info!("sniffer heartbeat loop started");
+    let sniffer = Arc::new(MavlinkSniffer::new(Arc::clone(&ctx), cancel.clone()));
+    handles.extend(sniffer.run());
 
-    // Wait for flight controller discovery
-    info!("waiting for flight controller...");
-    if wait_for_fc(&ctx, &cancel).await {
-        let systems = ctx.available_systems.read().await;
-        let fc_ids: Vec<u8> = systems
-            .iter()
-            .copied()
-            .filter(|&id| mavlink::is_fc_sysid(id))
-            .collect();
-        info!(?fc_ids, "flight controller detected, system operational");
-    } else {
-        info!("shutdown requested before flight controller detected");
-    }
+    let telemetry = Arc::new(TelemetryReporter::new(Arc::clone(&ctx), cancel.clone()));
+    handles.extend(telemetry.run());
 
     // Wait for shutdown signal (tasks run until cancelled)
     cancel.cancelled().await;
     info!("shutdown initiated, waiting for tasks to complete");
 
     // Wait for all tasks to finish
-    let _ = tokio::join!(
-        drone_handle,
-        drone_hb_handle,
-        sniffer_handle,
-        sniffer_hb_handle,
-    );
-    info!("unitctl shutdown complete");
-}
-
-/// Wait for a flight controller to be discovered (system ID < 200).
-///
-/// Returns `true` if an FC was found, `false` if shutdown was requested first.
-/// Matches Python's `get_fc_system_id()` behavior which waits for a heartbeat
-/// from a system with ID < 200.
-async fn wait_for_fc(ctx: &Arc<Context>, cancel: &CancellationToken) -> bool {
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-    loop {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return false,
-            _ = interval.tick() => {
-                let systems = ctx.available_systems.read().await;
-                if let Some(&fc_id) = systems.iter().find(|&&id| mavlink::is_fc_sysid(id)) {
-                    info!(system_id = fc_id, "flight controller discovered");
-                    return true;
-                }
-            }
-        }
+    for handle in handles {
+        let _ = handle.await;
     }
+    info!("unitctl shutdown complete");
 }
 
 /// Wait for a shutdown signal (SIGINT or SIGTERM).
@@ -168,74 +122,108 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::tests::test_config;
+    use std::time::Duration;
 
-    fn test_config() -> Config {
-        let toml_str = "[mavlink]\n";
-        toml::from_str(toml_str).unwrap()
-    }
-
-    fn test_config_with_port(port: u16) -> Config {
-        let toml_str = format!("[mavlink]\nhost = \"127.0.0.1\"\nport = {}\n", port);
-        toml::from_str(&toml_str).unwrap()
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_fc_returns_true_when_fc_discovered() {
-        let ctx = Context::new(test_config());
-        let cancel = CancellationToken::new();
-
-        // Pre-add an FC system (ID < 200)
-        ctx.add_system(1).await;
-
-        let result = wait_for_fc(&ctx, &cancel).await;
-        assert!(result);
+    fn test_config_with_port(port: u16) -> crate::config::Config {
+        let mut config = test_config();
+        config.mavlink.host = "127.0.0.1".to_string();
+        config.mavlink.port = port;
+        config
     }
 
     #[tokio::test]
-    async fn test_wait_for_fc_returns_false_on_cancel() {
-        let ctx = Context::new(test_config());
+    async fn test_sensor_manager_integration_spawns_and_stops() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        use async_trait::async_trait;
+
+        use crate::sensors::Sensor;
+        use crate::Task;
+
+        struct TestSensor {
+            started: Arc<AtomicBool>,
+            stopped: Arc<AtomicBool>,
+        }
+
+        #[async_trait]
+        impl Sensor for TestSensor {
+            fn name(&self) -> &str {
+                "test_sensor"
+            }
+            async fn run(&self, _ctx: Arc<Context>, cancel: CancellationToken) {
+                self.started.store(true, Ordering::SeqCst);
+                cancel.cancelled().await;
+                self.stopped.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let config = test_config();
+        let ctx = Context::new(config);
         let cancel = CancellationToken::new();
 
-        let ctx_clone = Arc::clone(&ctx);
-        let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { wait_for_fc(&ctx_clone, &cancel_clone).await });
+        let started = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::new(AtomicBool::new(false));
 
-        // Cancel after a short delay
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Build a SensorManager with a test sensor directly
+        let manager = Arc::new(SensorManager {
+            ctx: Arc::clone(&ctx),
+            cancel: cancel.clone(),
+            sensors: Mutex::new(vec![Box::new(TestSensor {
+                started: Arc::clone(&started),
+                stopped: Arc::clone(&stopped),
+            })]),
+        });
+        assert_eq!(manager.sensors.lock().unwrap().len(), 1);
+
+        // Spawn sensors — same pattern as main.rs wiring
+        manager.run();
+
+        // Verify sensor task started
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(started.load(Ordering::SeqCst), "sensor should have started");
+        assert!(
+            !stopped.load(Ordering::SeqCst),
+            "sensor should still be running"
+        );
+
+        // Cancel and verify graceful shutdown
         cancel.cancel();
-
-        let result = tokio::time::timeout(Duration::from_secs(2), handle)
-            .await
-            .expect("wait_for_fc didn't stop on cancel")
-            .unwrap();
-        assert!(!result);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "sensor should have stopped after cancel"
+        );
     }
 
     #[tokio::test]
-    async fn test_wait_for_fc_ignores_non_fc_systems() {
-        let ctx = Context::new(test_config());
+    async fn test_sensor_manager_from_config_integration() {
+        // Verify SensorManager can be created from config and spawned,
+        // matching the exact pattern used in main.rs
+        use crate::Task;
+
+        let config = test_config();
+        let ctx = Context::new(config);
         let cancel = CancellationToken::new();
 
-        // Add non-FC systems (ID >= 200)
-        ctx.add_system(200).await;
-        ctx.add_system(255).await;
+        let sensor_manager = Arc::new(SensorManager::new(
+            Arc::clone(&ctx),
+            cancel.clone(),
+            &ctx.config.sensors,
+        ));
+        // Default config has all 3 sensors enabled
+        assert_eq!(sensor_manager.sensors.lock().unwrap().len(), 3);
 
-        let ctx_clone = Arc::clone(&ctx);
-        let cancel_clone = cancel.clone();
-        let handle = tokio::spawn(async move { wait_for_fc(&ctx_clone, &cancel_clone).await });
+        // Spawn all — should not panic
+        sensor_manager.run();
 
-        // Should not return true for non-FC systems
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Give tasks a moment to start
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Now add a real FC
-        ctx.add_system(1).await;
-
-        let result = tokio::time::timeout(Duration::from_secs(3), handle)
-            .await
-            .expect("wait_for_fc didn't detect FC")
-            .unwrap();
-        assert!(result);
+        // Clean shutdown
+        cancel.cancel();
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     #[tokio::test]
@@ -258,17 +246,19 @@ mod tests {
         ctx.add_system(1).await;
 
         // Spawn drone component (connects as tcpout client)
-        let drone_ctx = Arc::clone(&ctx);
-        let drone_cancel = cancel.clone();
+        let component = Arc::new(DroneComponent::new(Arc::clone(&ctx), cancel.clone()));
+        let c = Arc::clone(&component);
         tokio::spawn(async move {
-            crate::mavlink::drone::run(drone_ctx, drone_cancel).await;
+            c.connect().await;
         });
 
         // Spawn drone heartbeat loop (enqueues heartbeats)
-        let hb_ctx = Arc::clone(&ctx);
         let hb_cancel = cancel.clone();
+        let hb_ctx = Arc::clone(&ctx);
+        let sysid = ctx.config.mavlink.self_sysid;
+        let compid = ctx.config.mavlink.self_compid;
         tokio::spawn(async move {
-            crate::mavlink::drone::heartbeat_loop(hb_ctx, hb_cancel).await;
+            mavlink::heartbeat_loop(&hb_cancel, sysid, compid, hb_ctx).await;
         });
 
         // Accept the drone's connection in a blocking thread

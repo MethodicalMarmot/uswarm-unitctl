@@ -14,4 +14,5 @@ target/
 .cargo/
 
 # ralphex progress logs
-.ralphex/progress/
+.ralphex
+.claude

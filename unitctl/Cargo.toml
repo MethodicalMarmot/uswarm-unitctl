@@ -5,10 +5,15 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-mavlink = { version = "0.14", features = ["ardupilotmega", "tcp"] }
+mavlink = { version = "0.17.1", features = ["ardupilotmega", "tcp"] }
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.0.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
+async-trait = "0.1"
+regex = "1"
+nix = { version = "0.31.2", features = ["signal", "process"] }
+modemmanager = { git = "https://github.com/omnect/modemmanager.git", rev = "dfab974" }
+zbus = { version = "5" }

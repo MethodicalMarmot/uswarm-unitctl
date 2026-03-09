@@ -1,9 +1,8 @@
 # unitctl configuration
 # Copy this file to config.toml and adjust as needed.
-# All fields have sensible defaults — only override what you need.
+# All fields are required.
 
 [general]
-# Enable debug-level logging (also enabled by --debug CLI flag)
 debug = false
 
 [mavlink]
@@ -21,3 +20,21 @@ iteration_period_ms = 10
 [mavlink.fc]
 tty = "/dev/ttyFC"
 baudrate = 57600
+
+[sensors]
+default_interval_s = 1.0
+
+[sensors.ping]
+enabled = true
+# interval_s = 1.0
+host = "10.45.0.2"
+interface = ""
+
+[sensors.lte]
+enabled = true
+# interval_s = 1.0
+neighbor_expiry_s = 30.0
+
+[sensors.cpu_temp]
+enabled = true
+# interval_s = 5.0

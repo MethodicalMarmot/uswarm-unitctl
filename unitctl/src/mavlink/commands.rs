@@ -1,4 +1,4 @@
-// Used by tests now and will be wired into command handling in Tasks 3-6.
+// Used by tests now and will be wired into command handling in the future.
 #![allow(dead_code)]
 
 /// Custom MAV_CMD_USER_1 subcommand IDs (31011-31049).

@@ -173,7 +173,6 @@ MavlinkSniffer ──→ broadcast channel ──→ Context (HEARTBEAT → syst
 
 **Future migration phases:**
 - LTE monitoring rewrite
-- WFB monitoring rewrite
 - Camera manager rewrite
 - Base station connector rewrite
 - Web server rewrite

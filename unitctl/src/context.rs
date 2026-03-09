@@ -1,14 +1,11 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use mavlink::ardupilotmega::MavMessage;
-use mavlink::MavHeader;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
 use crate::config::Config;
-
-/// A received MAVLink message with its header.
-pub type MavFrame = (MavHeader, MavMessage);
+use crate::mavlink::{is_fc_sysid, MavFrame};
+use crate::sensors::SensorValues;
 
 /// Shared application context.
 ///
@@ -32,6 +29,9 @@ pub struct Context {
 
     /// Set of discovered flight controller system IDs (from heartbeats).
     pub available_systems: RwLock<HashSet<u8>>,
+
+    /// Current sensor readings, updated by sensor tasks.
+    pub sensors: SensorValues,
 }
 
 const BROADCAST_CAPACITY: usize = 256;
@@ -49,11 +49,16 @@ impl Context {
             tx_outgoing,
             outgoing_rx: RwLock::new(Some(rx_outgoing)),
             available_systems: RwLock::new(HashSet::new()),
+            sensors: SensorValues {
+                ping: RwLock::new(None),
+                lte: RwLock::new(None),
+                cpu_temp: RwLock::new(None),
+            },
         })
     }
 
     /// Subscribe to the broadcast channel for incoming MAVLink messages.
-    #[allow(dead_code)] // Used by tests and future tasks (switcher, telemetry)
+    #[allow(dead_code)] // Used by sniffer tests and future switcher component
     pub fn subscribe_broadcast(&self) -> broadcast::Receiver<MavFrame> {
         self.tx_broadcast.subscribe()
     }
@@ -64,13 +69,23 @@ impl Context {
         self.outgoing_rx.write().await.take()
     }
 
+    /// Retrieves a set of Flight Controller (FC) system IDs.
+    pub async fn get_fc_sysids(&self) -> HashSet<u8> {
+        let systems = self.available_systems.read().await;
+        systems
+            .iter()
+            .filter(|&&id| is_fc_sysid(id))
+            .copied()
+            .collect()
+    }
+
     /// Register a discovered system ID. Returns `true` if the system was newly added.
     pub async fn add_system(&self, system_id: u8) -> bool {
         self.available_systems.write().await.insert(system_id)
     }
 
     /// Check if a system ID has been discovered.
-    #[allow(dead_code)] // Used by tests; useful for future components
+    #[allow(dead_code)] // Used by tests and future switcher component
     pub async fn has_system(&self, system_id: u8) -> bool {
         self.available_systems.read().await.contains(&system_id)
     }
@@ -79,12 +94,12 @@ impl Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::tests::test_config;
+    use crate::sensors::cpu_temp::CpuTempReading;
+    use crate::sensors::lte::{LteReading, LteSignalQuality};
+    use crate::sensors::ping::PingReading;
     use mavlink::ardupilotmega::*;
-
-    fn test_config() -> Config {
-        let toml_str = "[mavlink]\n";
-        toml::from_str(toml_str).unwrap()
-    }
+    use mavlink::MavHeader;
 
     fn make_heartbeat(mavtype: MavType) -> MavMessage {
         MavMessage::HEARTBEAT(HEARTBEAT_DATA {
@@ -210,5 +225,94 @@ mod tests {
         let (h2, _) = rx2.recv().await.unwrap();
         assert_eq!(h1.system_id, 1);
         assert_eq!(h2.system_id, 1);
+    }
+
+    // -- Acceptance: sensor values are stored in Context correctly --
+
+    #[tokio::test]
+    async fn test_sensor_values_initially_none() {
+        let ctx = Context::new(test_config());
+        assert!(ctx.sensors.ping.read().await.is_none());
+        assert!(ctx.sensors.lte.read().await.is_none());
+        assert!(ctx.sensors.cpu_temp.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sensor_values_ping_write_read() {
+        let ctx = Context::new(test_config());
+
+        let reading = PingReading {
+            reachable: true,
+            latency_ms: 25.5,
+            loss_percent: 3,
+        };
+        *ctx.sensors.ping.write().await = Some(reading);
+
+        let stored = ctx.sensors.ping.read().await;
+        let stored = stored.as_ref().unwrap();
+        assert!(stored.reachable);
+        assert_eq!(stored.latency_ms, 25.5);
+        assert_eq!(stored.loss_percent, 3);
+    }
+
+    #[tokio::test]
+    async fn test_sensor_values_lte_write_read() {
+        let ctx = Context::new(test_config());
+
+        let reading = LteReading {
+            signal: LteSignalQuality {
+                rsrq: -10,
+                rsrp: -85,
+                rssi: -60,
+                rssnr: 15,
+                earfcn: 1300,
+                tx_power: 23,
+                pcid: 42,
+            },
+            neighbors: std::collections::HashMap::new(),
+        };
+        *ctx.sensors.lte.write().await = Some(reading);
+
+        let stored = ctx.sensors.lte.read().await;
+        let stored = stored.as_ref().unwrap();
+        assert_eq!(stored.signal.rsrp, -85);
+        assert_eq!(stored.signal.pcid, 42);
+    }
+
+    #[tokio::test]
+    async fn test_sensor_values_cpu_temp_write_read() {
+        let ctx = Context::new(test_config());
+
+        let reading = CpuTempReading {
+            temperature_c: 42.5,
+        };
+        *ctx.sensors.cpu_temp.write().await = Some(reading);
+
+        let stored = ctx.sensors.cpu_temp.read().await;
+        let stored = stored.as_ref().unwrap();
+        assert_eq!(stored.temperature_c, 42.5);
+    }
+
+    #[tokio::test]
+    async fn test_sensor_values_concurrent_access() {
+        let ctx = Context::new(test_config());
+        let ctx = Arc::clone(&ctx);
+
+        // Write from one task
+        let ctx2 = Arc::clone(&ctx);
+        let writer = tokio::spawn(async move {
+            *ctx2.sensors.ping.write().await = Some(PingReading {
+                reachable: true,
+                latency_ms: 10.0,
+                loss_percent: 0,
+            });
+        });
+
+        writer.await.unwrap();
+
+        // Read from another context reference
+        let stored = ctx.sensors.ping.read().await;
+        assert!(stored.is_some());
+        assert!(stored.as_ref().unwrap().reachable);
     }
 }

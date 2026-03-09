@@ -8,3 +8,10 @@ __pycache__
 *.swp
 *.svg
 venv
+
+# Rust build artifacts
+target/
+.cargo/
+
+# ralphex progress logs
+.ralphex/progress/

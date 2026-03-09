@@ -1,0 +1,23 @@
+# unitctl configuration
+# Copy this file to config.toml and adjust as needed.
+# All fields have sensible defaults — only override what you need.
+
+[general]
+# Enable debug-level logging (also enabled by --debug CLI flag)
+debug = false
+
+[mavlink]
+protocol = "tcpout"
+host = "127.0.0.1"
+port = 5760
+self_sysid = 1
+self_compid = 10
+gcs_sysid = 255
+gcs_compid = 190
+sniffer_sysid = 199
+bs_sysid = 200
+iteration_period_ms = 10
+
+[mavlink.fc]
+tty = "/dev/ttyFC"
+baudrate = 57600

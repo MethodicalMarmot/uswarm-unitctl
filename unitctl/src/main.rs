@@ -1,10 +1,12 @@
 mod config;
 mod context;
+mod env;
 mod mavlink;
 mod sensors;
 
 use std::sync::Arc;
 
+use crate::env::{CameraEnvWriter, MavlinkEnvWriter};
 use crate::mavlink::drone_component::DroneComponent;
 use crate::mavlink::sniffer_component::MavlinkSniffer;
 use crate::mavlink::telemetry_reporter::TelemetryReporter;
@@ -49,7 +51,8 @@ async fn main() {
 
     info!(
         host = %config.mavlink.host,
-        port = config.mavlink.port,
+        local_mavlink_port = config.mavlink.local_mavlink_port,
+        remote_mavlink_port = config.mavlink.remote_mavlink_port,
         self_sysid = config.mavlink.self_sysid,
         self_compid = config.mavlink.self_compid,
         "configuration loaded"
@@ -69,6 +72,13 @@ async fn main() {
     });
 
     let mut handles = vec![];
+
+    // Spawn env file writers first — they write once and exit
+    let mavlink_env = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx), cancel.clone()));
+    handles.extend(mavlink_env.run());
+
+    let camera_env = Arc::new(CameraEnvWriter::new(Arc::clone(&ctx), cancel.clone()));
+    handles.extend(camera_env.run());
 
     let sensor_manager = Arc::new(SensorManager::new(
         Arc::clone(&ctx),
@@ -128,7 +138,7 @@ mod tests {
     fn test_config_with_port(port: u16) -> crate::config::Config {
         let mut config = test_config();
         config.mavlink.host = "127.0.0.1".to_string();
-        config.mavlink.port = port;
+        config.mavlink.local_mavlink_port = port;
         config
     }
 

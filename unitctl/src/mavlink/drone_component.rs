@@ -50,6 +50,16 @@ impl DroneComponent {
                 .instrument(info_span!(TRACING_SPAN_NAME))
                 .await
             {
+                // Discard stale messages queued during the outage so we start
+                // with fresh state on each new connection.
+                let stale = self.drain_queue(&mut outgoing_rx);
+                if !stale.is_empty() {
+                    info!(
+                        count = stale.len(),
+                        "discarded stale messages from queue on reconnect"
+                    );
+                }
+
                 // Drain loop: pull messages from outgoing queue and send them
                 let disconnected = self.send_loop(&mut outgoing_rx, &conn).await;
 

@@ -114,22 +114,28 @@ impl TelemetryReporter {
         let gcs_frame = build_fn(gcs_sysid, 0); // broadcast to all components
         let bs_frame = build_fn(bs_sysid, 0);
 
-        tokio::select! {
-            biased;
-            _ = self.cancel.cancelled() => return false,
-            result = self.ctx.tx_outgoing.send(gcs_frame) => {
-                if result.is_err() {
-                    error!("telemetry: outgoing channel closed (GCS)");
-                    return false;
-                }
+        // Check capacity before sending to avoid asymmetric drops where GCS
+        // always wins the last slot. If we can't fit both, drop both.
+        if self.ctx.tx_outgoing.capacity() < 2 {
+            debug!("telemetry: outgoing queue full, dropping GCS+BS messages");
+            // Still check if the channel is closed
+            if self.ctx.tx_outgoing.is_closed() {
+                error!("telemetry: outgoing channel closed");
+                return false;
             }
+            return true;
         }
-        tokio::select! {
-            biased;
-            _ = self.cancel.cancelled() => return false,
-            result = self.ctx.tx_outgoing.send(bs_frame) => {
-                if result.is_err() {
-                    error!("telemetry: outgoing channel closed (BS)");
+
+        for (label, frame) in [("GCS", gcs_frame), ("BS", bs_frame)] {
+            match self.ctx.tx_outgoing.try_send(frame) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    // Benign TOCTOU race: another producer took a slot between
+                    // our capacity check and this send.
+                    debug!("telemetry: outgoing queue full, dropping {label} message");
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    error!("telemetry: outgoing channel closed ({label})");
                     return false;
                 }
             }

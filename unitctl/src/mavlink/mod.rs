@@ -132,17 +132,14 @@ pub async fn heartbeat_loop(cancel: &CancellationToken, sysid: u8, compid: u8, c
             }
             _ = interval.tick() => {
                 let frame = build_heartbeat(sysid, compid);
-                tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => {
-                        info!("mavlink heartbeat: shutdown while sending");
-                        return;
+                match ctx.tx_outgoing.try_send(frame) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        warn!("mavlink heartbeat: outgoing queue full, dropping heartbeat");
                     }
-                    result = ctx.tx_outgoing.send(frame) => {
-                        if result.is_err() {
-                            warn!("mavlink heartbeat: outgoing channel closed");
-                            return;
-                        }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        warn!("mavlink heartbeat: outgoing channel closed");
+                        return;
                     }
                 }
             }

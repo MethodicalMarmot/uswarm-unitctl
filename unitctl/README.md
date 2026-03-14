@@ -72,7 +72,8 @@ debug = false                # Enable debug logging via config (also enabled by 
 [mavlink]
 protocol = "tcpout"          # Connection protocol (only "tcpout" supported)
 host = "127.0.0.1"           # mavlink-routerd host
-port = 5760                  # mavlink-routerd port
+local_mavlink_port = 5760    # Local port for Rust code to connect to mavlink-routerd
+remote_mavlink_port = 14550  # Remote mavlink port written to env file
 self_sysid = 1               # MAVLink system ID for this unit
 self_compid = 10             # MAVLink component ID for this unit
 gcs_sysid = 255              # Ground control station system ID
@@ -80,6 +81,8 @@ gcs_compid = 190             # Ground control station component ID
 sniffer_sysid = 199          # Sniffer system ID for passive listening
 bs_sysid = 200               # Base station system ID
 iteration_period_ms = 10     # Message drain interval in ms
+gcs_ip = "10.101.0.1"       # GCS IP address written to mavlink env file
+env_path = "/etc/mavlink.env" # Path where mavlink env file is written at startup
 
 [mavlink.fc]
 tty = "/dev/ttyFC"           # Flight controller serial device
@@ -102,6 +105,18 @@ neighbor_expiry_s = 30.0     # Remove neighbors not seen for this many seconds
 [sensors.cpu_temp]
 enabled = true               # Enable CPU temperature sensor
 # interval_s = 5.0           # Override default interval (optional)
+
+[camera]
+gcs_ip = "10.101.0.1"       # GCS IP address for camera env file
+env_path = "/etc/camera.env" # Path where camera env file is written at startup
+remote_video_port = 5600     # Remote video port
+width = 640                  # Camera resolution width
+height = 360                 # Camera resolution height
+framerate = 60               # Camera framerate
+bitrate = 1664000            # Camera bitrate
+flip = 0                     # Camera flip: 0=none, 1=horizontal, 2=vertical, 3=both
+camera_type = "rpi"          # Camera type identifier
+device = "/dev/video1"       # Camera device path
 ```
 
 All sections and fields must be present in the config file. The only optional field is `interval_s` on each sensor, which overrides `default_interval_s` when set.
@@ -125,10 +140,13 @@ mavlink-routerd (TCP:5760)
     |       +-- Context.available_systems -- tracks discovered system IDs
     |
     +-- SensorManager -- spawns and manages sensor tasks
-            |
-            +-- PingSensor -- pings target host, tracks latency and loss
-            +-- LteSensor -- reads LTE signal quality via ModemManager D-Bus
-            +-- CpuTempSensor -- reads CPU temperature from sysfs
+    |       |
+    |       +-- PingSensor -- pings target host, tracks latency and loss
+    |       +-- LteSensor -- reads LTE signal quality via ModemManager D-Bus
+    |       +-- CpuTempSensor -- reads CPU temperature from sysfs
+    |
+    +-- MavlinkEnvWriter -- writes mavlink.env at startup, then exits
+    +-- CameraEnvWriter -- writes camera.env at startup, then exits
 ```
 
 ### Components
@@ -156,15 +174,23 @@ The sensor subsystem (`sensors/`) provides a trait-based framework for gathering
 
 Each sensor can be independently enabled/disabled and has a configurable polling interval (with a global default fallback).
 
+### Env File Writers
+
+The env module (`env/`) generates environment files for external services at startup. Each writer implements the `Task` trait, writes its file once (creating parent directories if needed), then exits.
+
+- **MavlinkEnvWriter** (`env/mavlink_env.rs`) - Writes mavlink.env with GCS_IP, REMOTE_MAVLINK_PORT, SNIFFER_SYS_ID, LOCAL_MAVLINK_PORT, FC_TTY, FC_BAUDRATE. Path configured via `mavlink.env_path`.
+- **CameraEnvWriter** (`env/camera_env.rs`) - Writes camera.env with GCS_IP, REMOTE_VIDEO_PORT, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE, CAMERA_BITRATE, CAMERA_FLIP, CAMERA_TYPE, CAMERA_DEVICE. Path configured via `camera.env_path`.
+
 ### Startup Sequence
 
 1. Parse CLI arguments and load TOML config
 2. Create shared Context with channels and sensor value storage
-3. Spawn SensorManager (starts enabled sensor tasks)
-4. Spawn drone component and sniffer tasks (with heartbeat loops)
-5. Spawn TelemetryReporter (1Hz sensor value broadcasts)
-6. Wait for flight controller discovery (heartbeat with system ID < 200)
-7. Run until SIGINT/SIGTERM triggers graceful shutdown
+3. Spawn env file writers (MavlinkEnvWriter, CameraEnvWriter) — write config-derived env files and exit
+4. Spawn SensorManager (starts enabled sensor tasks)
+5. Spawn drone component and sniffer tasks (with heartbeat loops)
+6. Spawn TelemetryReporter (1Hz sensor value broadcasts)
+7. Wait for flight controller discovery (heartbeat with system ID < 200)
+8. Run until SIGINT/SIGTERM triggers graceful shutdown
 
 ## Testing
 
@@ -172,7 +198,7 @@ Each sensor can be independently enabled/disabled and has a configurable polling
 cargo test
 ```
 
-Tests cover config parsing, custom command encoding/decoding, channel behavior, heartbeat construction, message queue drain, system discovery, integration with a mock TCP server, sensor value parsing (ping output, AT command responses, sysfs temperature), sensor manager construction, telemetry message construction, and concurrent sensor value access.
+Tests cover config parsing, custom command encoding/decoding, channel behavior, heartbeat construction, message queue drain, system discovery, integration with a mock TCP server, sensor value parsing (ping output, AT command responses, sysfs temperature), sensor manager construction, telemetry message construction, concurrent sensor value access, and env file content generation and file write verification.
 
 ## Linting
 

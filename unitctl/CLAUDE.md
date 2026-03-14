@@ -25,17 +25,19 @@ cargo run -- --config config.toml --debug
 
 ## Configuration
 
-- `config.toml` (from `config.toml.example`) — TOML config with sections: general, mavlink, mavlink.fc, sensors
+- `config.toml` (from `config.toml.example`) — TOML config with sections: general, mavlink, mavlink.fc, camera, sensors
 - All fields are required — there are no serde defaults. The config file must explicitly specify every value.
 - Config is loaded via `config::load_config()` and parsed with serde
 - Debug logging is enabled by either `--debug` CLI flag or `general.debug = true` in config
+- `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields
+- `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type`, `device`
 - `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`)
 
 ## Architecture
 
 ### Async Task System
 
-`main.rs` defines a `Task` trait (`run() -> Vec<JoinHandle>`) implemented by all major components. It creates a shared `Context`, spawns tasks (drone component, sniffer, sensor manager, telemetry reporter), waits for flight controller discovery, then runs until SIGINT/SIGTERM.
+`main.rs` defines a `Task` trait (`run() -> Vec<JoinHandle>`) implemented by all major components. It creates a shared `Context`, spawns tasks (env writers, drone component, sniffer, sensor manager, telemetry reporter), waits for flight controller discovery, then runs until SIGINT/SIGTERM.
 
 ### Context (`context.rs`)
 
@@ -49,6 +51,14 @@ Trait-based sensor framework. Each sensor implements `Sensor` trait (`name()` + 
 - **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess, sends SIGQUIT for stats, parses latency/loss. Defines `PingReading`.
 - **LteSensor** (`sensors/lte.rs`) — ModemManager D-Bus integration, modem detection (SIMCOM 7600, Quectel EM12/EM06E/EM06GL), AT command signal quality parsing, neighbor cell tracking. Defines `LteReading`, `LteSignalQuality`, `LteNeighborCell`.
 - **CpuTempSensor** (`sensors/cpu_temp.rs`) — reads sysfs thermal zone, converts millidegrees to degrees. Defines `CpuTempReading`.
+
+### Env File Writers (`env/`)
+
+Write-on-start module that generates environment files for external services (mavlink-routerd, camera streamer) at startup. Each writer implements the `Task` trait, spawns a single tokio task that writes the file (creating parent directories if needed) and exits.
+
+- **MavlinkEnvWriter** (`env/mavlink_env.rs`) — writes mavlink.env with GCS_IP, REMOTE_MAVLINK_PORT, SNIFFER_SYS_ID, LOCAL_MAVLINK_PORT, FC_TTY, FC_BAUDRATE. Path configured via `mavlink.env_path`.
+- **CameraEnvWriter** (`env/camera_env.rs`) — writes camera.env with GCS_IP, REMOTE_VIDEO_PORT, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE, CAMERA_BITRATE, CAMERA_FLIP, CAMERA_TYPE, CAMERA_DEVICE. Path configured via `camera.env_path`.
+- Env file format: plain text, one KEY=VALUE per line, no quotes, no trailing newline.
 
 ### MAVLink Components (`mavlink/`)
 
@@ -75,7 +85,10 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 
 - `MavFrame = (MavHeader, MavMessage)` — header + message tuple, defined in `mavlink/mod.rs`
 - `MavCmdUser1SubCmd` — enum for custom command IDs (31011-31049)
-- `Config` — top-level config struct with `general`, `mavlink`, and `sensors` sections (all fields required)
+- `Config` — top-level config struct with `general`, `mavlink`, `camera`, and `sensors` sections (all fields required)
+- `CameraConfig` — camera env file settings: gcs_ip, env_path, video port, resolution, framerate, bitrate, flip, camera_type, device
+- `MavlinkEnvWriter` — writes mavlink env file at startup from mavlink config (defined in `env/mavlink_env.rs`)
+- `CameraEnvWriter` — writes camera env file at startup from camera config (defined in `env/camera_env.rs`)
 - `Context` — shared state with channels, system discovery, and sensor values
 - `SensorValues` — RwLock-wrapped optional readings for ping, LTE, and CPU temperature (defined in `sensors/mod.rs`)
 - `PingReading` — reachable, latency_ms, loss_percent (defined in `sensors/ping.rs`)

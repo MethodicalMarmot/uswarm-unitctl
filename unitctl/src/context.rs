@@ -115,7 +115,7 @@ mod tests {
     #[tokio::test]
     async fn test_context_creation() {
         let ctx = Context::new(test_config());
-        assert_eq!(ctx.config.mavlink.port, 5760);
+        assert_eq!(ctx.config.mavlink.local_mavlink_port, 5760);
         assert!(ctx.available_systems.read().await.is_empty());
     }
 

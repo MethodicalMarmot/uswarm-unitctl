@@ -22,6 +22,7 @@ pub struct Config {
     pub general: GeneralConfig,
     pub mavlink: MavlinkConfig,
     pub sensors: SensorsConfig,
+    pub camera: CameraConfig,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -33,7 +34,8 @@ pub struct GeneralConfig {
 pub struct MavlinkConfig {
     pub protocol: String,
     pub host: String,
-    pub port: u16,
+    pub local_mavlink_port: u16,
+    pub remote_mavlink_port: u16,
     pub self_sysid: u8,
     pub self_compid: u8,
     pub gcs_sysid: u8,
@@ -41,6 +43,8 @@ pub struct MavlinkConfig {
     pub sniffer_sysid: u8,
     pub bs_sysid: u8,
     pub iteration_period_ms: u64,
+    pub gcs_ip: String,
+    pub env_path: String,
     pub fc: FcConfig,
 }
 
@@ -48,6 +52,20 @@ pub struct MavlinkConfig {
 pub struct FcConfig {
     pub tty: String,
     pub baudrate: u32,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct CameraConfig {
+    pub gcs_ip: String,
+    pub env_path: String,
+    pub remote_video_port: u16,
+    pub width: u32,
+    pub height: u32,
+    pub framerate: u32,
+    pub bitrate: u32,
+    pub flip: u8,
+    pub camera_type: String,
+    pub device: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -123,7 +141,7 @@ impl Default for CpuTempSensorConfig {
 impl MavlinkConfig {
     /// Returns the MAVLink connection string (e.g., "tcpout:127.0.0.1:5760")
     pub fn connection_string(&self) -> String {
-        format!("{}:{}:{}", self.protocol, self.host, self.port)
+        format!("{}:{}:{}", self.protocol, self.host, self.local_mavlink_port)
     }
 }
 
@@ -177,6 +195,82 @@ impl Config {
         if m.gcs_sysid == m.bs_sysid {
             return Err("mavlink.gcs_sysid must differ from bs_sysid".into());
         }
+        if m.env_path.is_empty() {
+            return Err("mavlink.env_path must not be empty".into());
+        }
+        if m.gcs_ip.is_empty() || m.gcs_ip.starts_with('-') {
+            return Err(
+                "mavlink.gcs_ip must be a non-empty value that does not start with '-'".into(),
+            );
+        }
+        if m.fc.tty.is_empty() {
+            return Err("mavlink.fc.tty must not be empty".into());
+        }
+        if m.fc.baudrate == 0 {
+            return Err("mavlink.fc.baudrate must be greater than 0".into());
+        }
+        if m.local_mavlink_port == 0 {
+            return Err("mavlink.local_mavlink_port must be greater than 0".into());
+        }
+        if m.remote_mavlink_port == 0 {
+            return Err("mavlink.remote_mavlink_port must be greater than 0".into());
+        }
+
+        // Validate camera config
+        let c = &self.camera;
+        if c.env_path.is_empty() {
+            return Err("camera.env_path must not be empty".into());
+        }
+        if c.gcs_ip.is_empty() || c.gcs_ip.starts_with('-') {
+            return Err(
+                "camera.gcs_ip must be a non-empty value that does not start with '-'".into(),
+            );
+        }
+        if c.camera_type.is_empty() {
+            return Err("camera.camera_type must not be empty".into());
+        }
+        if c.device.is_empty() {
+            return Err("camera.device must not be empty".into());
+        }
+        if c.width == 0 {
+            return Err("camera.width must be greater than 0".into());
+        }
+        if c.height == 0 {
+            return Err("camera.height must be greater than 0".into());
+        }
+        if c.framerate == 0 {
+            return Err("camera.framerate must be greater than 0".into());
+        }
+        if c.bitrate == 0 {
+            return Err("camera.bitrate must be greater than 0".into());
+        }
+        if c.remote_video_port == 0 {
+            return Err("camera.remote_video_port must be greater than 0".into());
+        }
+
+        // Validate mavlink.host
+        if m.host.is_empty() || m.host.starts_with('-') {
+            return Err(
+                "mavlink.host must be a non-empty value that does not start with '-'".into(),
+            );
+        }
+
+        // Validate string config values don't contain newlines (prevents env variable injection
+        // in generated env files, and malformed connection strings)
+        for (field, value) in [
+            ("mavlink.host", m.host.as_str()),
+            ("mavlink.gcs_ip", m.gcs_ip.as_str()),
+            ("mavlink.env_path", m.env_path.as_str()),
+            ("mavlink.fc.tty", m.fc.tty.as_str()),
+            ("camera.gcs_ip", c.gcs_ip.as_str()),
+            ("camera.env_path", c.env_path.as_str()),
+            ("camera.camera_type", c.camera_type.as_str()),
+            ("camera.device", c.device.as_str()),
+        ] {
+            if value.contains('\n') || value.contains('\r') {
+                return Err(format!("{field} must not contain newline characters").into());
+            }
+        }
 
         // Validate sensor intervals (must be finite and positive; TOML allows inf/nan)
         if !self.sensors.default_interval_s.is_finite() || self.sensors.default_interval_s <= 0.0 {
@@ -224,7 +318,8 @@ debug = false
 [mavlink]
 protocol = "tcpout"
 host = "127.0.0.1"
-port = 5760
+local_mavlink_port = 5760
+remote_mavlink_port = 5760
 self_sysid = 1
 self_compid = 10
 gcs_sysid = 255
@@ -232,10 +327,24 @@ gcs_compid = 190
 sniffer_sysid = 199
 bs_sysid = 200
 iteration_period_ms = 10
+gcs_ip = "10.101.0.1"
+env_path = "/etc/mavlink.env"
 
 [mavlink.fc]
 tty = "/dev/ttyFC"
 baudrate = 57600
+
+[camera]
+gcs_ip = "10.101.0.1"
+env_path = "/etc/camera.env"
+remote_video_port = 5600
+width = 640
+height = 360
+framerate = 60
+bitrate = 1664000
+flip = 0
+camera_type = "rpi"
+device = "/dev/video1"
 
 [sensors]
 default_interval_s = 1.0
@@ -266,7 +375,8 @@ debug = true
 [mavlink]
 protocol = "tcpout"
 host = "192.168.1.100"
-port = 5761
+local_mavlink_port = 5761
+remote_mavlink_port = 5761
 self_sysid = 2
 self_compid = 11
 gcs_sysid = 254
@@ -274,10 +384,24 @@ gcs_compid = 191
 sniffer_sysid = 198
 bs_sysid = 201
 iteration_period_ms = 20
+gcs_ip = "10.101.0.2"
+env_path = "/tmp/mavlink.env"
 
 [mavlink.fc]
 tty = "/dev/ttyS0"
 baudrate = 115200
+
+[camera]
+gcs_ip = "10.101.0.2"
+env_path = "/tmp/camera.env"
+remote_video_port = 5601
+width = 1280
+height = 720
+framerate = 30
+bitrate = 3000000
+flip = 2
+camera_type = "usb"
+device = "/dev/video0"
 
 [sensors]
 default_interval_s = 1.0
@@ -298,7 +422,8 @@ enabled = true
         assert!(config.general.debug);
         assert_eq!(config.mavlink.protocol, "tcpout");
         assert_eq!(config.mavlink.host, "192.168.1.100");
-        assert_eq!(config.mavlink.port, 5761);
+        assert_eq!(config.mavlink.local_mavlink_port, 5761);
+        assert_eq!(config.mavlink.remote_mavlink_port, 5761);
         assert_eq!(config.mavlink.self_sysid, 2);
         assert_eq!(config.mavlink.self_compid, 11);
         assert_eq!(config.mavlink.gcs_sysid, 254);
@@ -306,8 +431,20 @@ enabled = true
         assert_eq!(config.mavlink.sniffer_sysid, 198);
         assert_eq!(config.mavlink.bs_sysid, 201);
         assert_eq!(config.mavlink.iteration_period_ms, 20);
+        assert_eq!(config.mavlink.gcs_ip, "10.101.0.2");
+        assert_eq!(config.mavlink.env_path, "/tmp/mavlink.env");
         assert_eq!(config.mavlink.fc.tty, "/dev/ttyS0");
         assert_eq!(config.mavlink.fc.baudrate, 115200);
+        assert_eq!(config.camera.gcs_ip, "10.101.0.2");
+        assert_eq!(config.camera.env_path, "/tmp/camera.env");
+        assert_eq!(config.camera.remote_video_port, 5601);
+        assert_eq!(config.camera.width, 1280);
+        assert_eq!(config.camera.height, 720);
+        assert_eq!(config.camera.framerate, 30);
+        assert_eq!(config.camera.bitrate, 3000000);
+        assert_eq!(config.camera.flip, 2);
+        assert_eq!(config.camera.camera_type, "usb");
+        assert_eq!(config.camera.device, "/dev/video0");
     }
 
     #[test]
@@ -316,7 +453,8 @@ enabled = true
         assert!(!config.general.debug);
         assert_eq!(config.mavlink.protocol, "tcpout");
         assert_eq!(config.mavlink.host, "127.0.0.1");
-        assert_eq!(config.mavlink.port, 5760);
+        assert_eq!(config.mavlink.local_mavlink_port, 5760);
+        assert_eq!(config.mavlink.remote_mavlink_port, 5760);
         assert_eq!(config.mavlink.self_sysid, 1);
         assert_eq!(config.mavlink.self_compid, 10);
         assert_eq!(config.mavlink.gcs_sysid, 255);
@@ -324,8 +462,20 @@ enabled = true
         assert_eq!(config.mavlink.sniffer_sysid, 199);
         assert_eq!(config.mavlink.bs_sysid, 200);
         assert_eq!(config.mavlink.iteration_period_ms, 10);
+        assert_eq!(config.mavlink.gcs_ip, "10.101.0.1");
+        assert_eq!(config.mavlink.env_path, "/etc/mavlink.env");
         assert_eq!(config.mavlink.fc.tty, "/dev/ttyFC");
         assert_eq!(config.mavlink.fc.baudrate, 57600);
+        assert_eq!(config.camera.gcs_ip, "10.101.0.1");
+        assert_eq!(config.camera.env_path, "/etc/camera.env");
+        assert_eq!(config.camera.remote_video_port, 5600);
+        assert_eq!(config.camera.width, 640);
+        assert_eq!(config.camera.height, 360);
+        assert_eq!(config.camera.framerate, 60);
+        assert_eq!(config.camera.bitrate, 1664000);
+        assert_eq!(config.camera.flip, 0);
+        assert_eq!(config.camera.camera_type, "rpi");
+        assert_eq!(config.camera.device, "/dev/video1");
         assert_eq!(config.sensors.default_interval_s, 1.0);
         assert!(config.sensors.ping.enabled);
         assert_eq!(config.sensors.ping.interval_s, None);
@@ -348,7 +498,8 @@ debug = true
 [mavlink]
 protocol = "tcpout"
 host = "127.0.0.1"
-port = 5760
+local_mavlink_port = 5760
+remote_mavlink_port = 5760
 self_sysid = 1
 self_compid = 10
 gcs_sysid = 255
@@ -374,7 +525,8 @@ debug = false
 
 [mavlink]
 host = "127.0.0.1"
-port = 5760
+local_mavlink_port = 5760
+remote_mavlink_port = 5760
 self_sysid = 1
 self_compid = 10
 gcs_sysid = 255
@@ -386,6 +538,18 @@ iteration_period_ms = 10
 [mavlink.fc]
 tty = "/dev/ttyFC"
 baudrate = 57600
+
+[camera]
+gcs_ip = "10.101.0.1"
+env_path = "/etc/camera.env"
+remote_video_port = 5600
+width = 640
+height = 360
+framerate = 60
+bitrate = 1664000
+flip = 0
+camera_type = "rpi"
+device = "/dev/video1"
 
 [sensors]
 default_interval_s = 1.0
@@ -421,7 +585,8 @@ enabled = true
 
         let config = load_config(&path).unwrap();
         assert_eq!(config.mavlink.host, "127.0.0.1");
-        assert_eq!(config.mavlink.port, 5760);
+        assert_eq!(config.mavlink.local_mavlink_port, 5760);
+        assert_eq!(config.mavlink.remote_mavlink_port, 5760);
         assert_eq!(config.mavlink.protocol, "tcpout");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -545,7 +710,8 @@ debug = false
 [mavlink]
 protocol = "tcpout"
 host = "127.0.0.1"
-port = 5760
+local_mavlink_port = 5760
+remote_mavlink_port = 5760
 self_sysid = 1
 self_compid = 10
 gcs_sysid = 255
@@ -553,10 +719,24 @@ gcs_compid = 190
 sniffer_sysid = 199
 bs_sysid = 200
 iteration_period_ms = 10
+gcs_ip = "10.101.0.1"
+env_path = "/etc/mavlink.env"
 
 [mavlink.fc]
 tty = "/dev/ttyFC"
 baudrate = 57600
+
+[camera]
+gcs_ip = "10.101.0.1"
+env_path = "/etc/camera.env"
+remote_video_port = 5600
+width = 640
+height = 360
+framerate = 60
+bitrate = 1664000
+flip = 0
+camera_type = "rpi"
+device = "/dev/video1"
 
 [sensors]
 default_interval_s = 2.0
@@ -709,5 +889,212 @@ interval_s = 10.0
         let mut config = test_config();
         config.sensors.ping.interface = "-evil".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_empty_env_path_rejected() {
+        let mut config = test_config();
+        config.mavlink.env_path = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("env_path"));
+    }
+
+    #[test]
+    fn test_empty_gcs_ip_rejected() {
+        let mut config = test_config();
+        config.mavlink.gcs_ip = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("gcs_ip"));
+    }
+
+    #[test]
+    fn test_dash_prefix_gcs_ip_rejected() {
+        let mut config = test_config();
+        config.mavlink.gcs_ip = "-malicious".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("gcs_ip"));
+    }
+
+    #[test]
+    fn test_camera_config_parsed() {
+        let config = test_config();
+        assert_eq!(config.camera.gcs_ip, "10.101.0.1");
+        assert_eq!(config.camera.env_path, "/etc/camera.env");
+        assert_eq!(config.camera.remote_video_port, 5600);
+        assert_eq!(config.camera.width, 640);
+        assert_eq!(config.camera.height, 360);
+        assert_eq!(config.camera.framerate, 60);
+        assert_eq!(config.camera.bitrate, 1664000);
+        assert_eq!(config.camera.flip, 0);
+        assert_eq!(config.camera.camera_type, "rpi");
+        assert_eq!(config.camera.device, "/dev/video1");
+    }
+
+    #[test]
+    fn test_camera_empty_env_path_rejected() {
+        let mut config = test_config();
+        config.camera.env_path = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.env_path"));
+    }
+
+    #[test]
+    fn test_camera_empty_gcs_ip_rejected() {
+        let mut config = test_config();
+        config.camera.gcs_ip = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.gcs_ip"));
+    }
+
+    #[test]
+    fn test_camera_dash_prefix_gcs_ip_rejected() {
+        let mut config = test_config();
+        config.camera.gcs_ip = "-bad".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.gcs_ip"));
+    }
+
+    #[test]
+    fn test_camera_empty_camera_type_rejected() {
+        let mut config = test_config();
+        config.camera.camera_type = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.camera_type"));
+    }
+
+    #[test]
+    fn test_camera_empty_device_rejected() {
+        let mut config = test_config();
+        config.camera.device = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.device"));
+    }
+
+    #[test]
+    fn test_camera_zero_width_rejected() {
+        let mut config = test_config();
+        config.camera.width = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.width"));
+    }
+
+    #[test]
+    fn test_camera_zero_height_rejected() {
+        let mut config = test_config();
+        config.camera.height = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.height"));
+    }
+
+    #[test]
+    fn test_camera_zero_framerate_rejected() {
+        let mut config = test_config();
+        config.camera.framerate = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.framerate"));
+    }
+
+    #[test]
+    fn test_camera_zero_bitrate_rejected() {
+        let mut config = test_config();
+        config.camera.bitrate = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.bitrate"));
+    }
+
+    #[test]
+    fn test_camera_zero_remote_video_port_rejected() {
+        let mut config = test_config();
+        config.camera.remote_video_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("camera.remote_video_port"));
+    }
+
+    #[test]
+    fn test_empty_mavlink_host_rejected() {
+        let mut config = test_config();
+        config.mavlink.host = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mavlink.host"));
+    }
+
+    #[test]
+    fn test_dash_prefix_mavlink_host_rejected() {
+        let mut config = test_config();
+        config.mavlink.host = "-evil".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mavlink.host"));
+    }
+
+    #[test]
+    fn test_newline_in_gcs_ip_rejected() {
+        let mut config = test_config();
+        config.mavlink.gcs_ip = "10.0.0.1\nEVIL=yes".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("newline"));
+    }
+
+    #[test]
+    fn test_newline_in_camera_type_rejected() {
+        let mut config = test_config();
+        config.camera.camera_type = "rpi\nEVIL=yes".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("newline"));
+    }
+
+    #[test]
+    fn test_carriage_return_in_device_rejected() {
+        let mut config = test_config();
+        config.camera.device = "/dev/video0\rEVIL".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("newline"));
+    }
+
+    #[test]
+    fn test_newline_in_fc_tty_rejected() {
+        let mut config = test_config();
+        config.mavlink.fc.tty = "/dev/ttyFC\nEVIL=yes".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("newline"));
+    }
+
+    #[test]
+    fn test_newline_in_mavlink_host_rejected() {
+        let mut config = test_config();
+        config.mavlink.host = "127.0.0.1\nEVIL".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("newline"));
+    }
+
+    #[test]
+    fn test_empty_fc_tty_rejected() {
+        let mut config = test_config();
+        config.mavlink.fc.tty = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mavlink.fc.tty"));
+    }
+
+    #[test]
+    fn test_zero_fc_baudrate_rejected() {
+        let mut config = test_config();
+        config.mavlink.fc.baudrate = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mavlink.fc.baudrate"));
+    }
+
+    #[test]
+    fn test_zero_local_mavlink_port_rejected() {
+        let mut config = test_config();
+        config.mavlink.local_mavlink_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mavlink.local_mavlink_port"));
+    }
+
+    #[test]
+    fn test_zero_remote_mavlink_port_rejected() {
+        let mut config = test_config();
+        config.mavlink.remote_mavlink_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mavlink.remote_mavlink_port"));
     }
 }

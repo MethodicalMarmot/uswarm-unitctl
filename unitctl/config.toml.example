@@ -8,7 +8,8 @@ debug = false
 [mavlink]
 protocol = "tcpout"
 host = "127.0.0.1"
-port = 5760
+local_mavlink_port = 5760
+remote_mavlink_port = 14550
 self_sysid = 1
 self_compid = 10
 gcs_sysid = 255
@@ -16,10 +17,29 @@ gcs_compid = 190
 sniffer_sysid = 199
 bs_sysid = 200
 iteration_period_ms = 10
+# GCS IP address written to mavlink env file
+gcs_ip = "10.101.0.1"
+# Path where mavlink env file is written at startup (read by mavlink-routerd)
+env_path = "/etc/mavlink.env"
 
 [mavlink.fc]
 tty = "/dev/ttyFC"
 baudrate = 57600
+
+# Camera env file settings (written at startup, read by camera streamer)
+[camera]
+gcs_ip = "10.101.0.1"
+# Path where camera env file is written at startup
+env_path = "/etc/camera.env"
+remote_video_port = 5600
+width = 640
+height = 360
+framerate = 60
+bitrate = 1664000
+# Camera flip: 0=none, 1=horizontal, 2=vertical, 3=both
+flip = 0
+camera_type = "rpi"
+device = "/dev/video1"
 
 [sensors]
 default_interval_s = 1.0

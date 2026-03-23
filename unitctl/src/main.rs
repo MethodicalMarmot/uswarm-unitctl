@@ -3,6 +3,7 @@ mod context;
 mod env;
 mod mavlink;
 mod sensors;
+mod services;
 
 use std::sync::Arc;
 
@@ -10,12 +11,13 @@ use crate::env::{CameraEnvWriter, MavlinkEnvWriter};
 use crate::mavlink::drone_component::DroneComponent;
 use crate::mavlink::sniffer_component::MavlinkSniffer;
 use crate::mavlink::telemetry_reporter::TelemetryReporter;
+use crate::services::modem_access::ModemAccessService;
 use clap::Parser;
 use config::Cli;
 use context::Context;
 use sensors::SensorManager;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 pub trait Task: Send + Sync {
@@ -72,6 +74,23 @@ async fn main() {
     });
 
     let mut handles = vec![];
+
+    // Spawn modem discovery as a background task.
+    // Once the modem is found, it is stored in Context so sensors can use it.
+    let modem_ctx = Arc::clone(&ctx);
+    let modem_cancel = cancel.clone();
+    let modem_handle = tokio::spawn(async move {
+        match ModemAccessService::start(&modem_cancel).await {
+            Ok(service) => {
+                info!("modem access service started, storing in context");
+                modem_ctx.set_modem(service).await;
+            }
+            Err(e) => {
+                warn!(error = %e, "modem access service failed to start");
+            }
+        }
+    });
+    handles.push(modem_handle);
 
     // Spawn env file writers first — they write once and exit
     let mavlink_env = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx), cancel.clone()));
@@ -348,5 +367,78 @@ mod tests {
         assert!(matches!(rx_msg, MavMessage::HEARTBEAT(_)));
 
         cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_modem_discovery_background_task_sets_context() {
+        // Simulates the main.rs startup pattern: a background task discovers
+        // the modem and stores it in Context via set_modem().
+        use crate::services::modem_access::{ModemAccess, ModemError};
+
+        struct FakeModem;
+
+        #[async_trait::async_trait]
+        impl ModemAccess for FakeModem {
+            async fn model(&self) -> Result<String, ModemError> {
+                Ok("TEST_MODEM".to_string())
+            }
+            async fn command(&self, _cmd: &str, _timeout_ms: u32) -> Result<String, ModemError> {
+                Ok("OK".to_string())
+            }
+        }
+
+        let ctx = Context::new(test_config());
+        assert!(ctx.get_modem().await.is_none());
+
+        // Simulate the background modem discovery task from main.rs
+        let modem_ctx = Arc::clone(&ctx);
+        tokio::spawn(async move {
+            let modem: Arc<dyn ModemAccess> = Arc::new(FakeModem);
+            modem_ctx.set_modem(modem).await;
+        });
+
+        // Wait for the background task to complete
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Verify modem is now available in context (same path sensors use)
+        let modem = ctx.get_modem().await;
+        assert!(modem.is_some(), "modem should be set by background task");
+        let model = modem.unwrap().model().await.unwrap();
+        assert_eq!(model, "TEST_MODEM");
+    }
+
+    #[tokio::test]
+    async fn test_modem_discovery_failure_does_not_block_startup() {
+        // If modem discovery fails, the rest of the startup should proceed.
+        // Context modem remains None, and sensors that need it will keep waiting.
+        let ctx = Context::new(test_config());
+        let cancel = CancellationToken::new();
+
+        // Cancel immediately to simulate discovery failure (cancelled during retry)
+        cancel.cancel();
+
+        let modem_ctx = Arc::clone(&ctx);
+        let handle = tokio::spawn(async move {
+            match crate::services::modem_access::ModemAccessService::start(&cancel).await {
+                Ok(service) => {
+                    modem_ctx.set_modem(service).await;
+                }
+                Err(_) => {
+                    // Expected — discovery was cancelled
+                }
+            }
+        });
+
+        // Background task should complete without blocking
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("background task should complete")
+            .expect("background task should not panic");
+
+        // Context modem should still be None
+        assert!(
+            ctx.get_modem().await.is_none(),
+            "modem should remain None when discovery fails"
+        );
     }
 }

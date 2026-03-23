@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,78 +8,9 @@ use tracing::{debug, info, warn};
 
 use crate::config::LteSensorConfig;
 use crate::context::Context;
+use crate::services::modem_access::{discover_modem, send_at_command, ModemAccess, ModemType};
 
 use super::Sensor;
-
-/// Supported modem types for LTE telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModemType {
-    Simcom7600,
-    QuectelEm12,
-    QuectelEm06E,
-    QuectelEm06GL,
-}
-
-impl fmt::Display for ModemType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModemType::Simcom7600 => write!(f, "SIMCOM_7600"),
-            ModemType::QuectelEm12 => write!(f, "QUECTEL_EM12"),
-            ModemType::QuectelEm06E => write!(f, "QUECTEL_EM06E"),
-            ModemType::QuectelEm06GL => write!(f, "QUECTEL_EM06GL"),
-        }
-    }
-}
-
-/// Modem model string to ModemType mapping.
-/// Order matters: more specific matches come first (e.g., "EM060K-GL" before "EM06").
-const MODEM_IDENTIFIERS: &[(&str, ModemType)] = &[
-    ("SIMCOM_SIM7600G-H", ModemType::Simcom7600),
-    ("EM12", ModemType::QuectelEm12),
-    ("EM060K-GL", ModemType::QuectelEm06GL),
-    ("EM06", ModemType::QuectelEm06E),
-];
-
-/// Detect modem type from the model string reported by ModemManager.
-///
-/// Checks if the model string contains any known modem identifier.
-/// More specific identifiers are checked first to avoid false matches.
-pub fn detect_modem_type(model: &str) -> Option<ModemType> {
-    for (identifier, modem_type) in MODEM_IDENTIFIERS {
-        if model.contains(identifier) {
-            return Some(*modem_type);
-        }
-    }
-    None
-}
-
-/// Error type for modem operations.
-#[derive(Debug, Clone)]
-pub enum ModemError {
-    /// D-Bus communication error.
-    Dbus(String),
-    /// AT command timed out.
-    Timeout,
-    /// No modem found on the system.
-    NoModem,
-    /// Modem model not recognized.
-    UnsupportedModem(String),
-}
-
-impl fmt::Display for ModemError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModemError::Dbus(msg) => write!(f, "D-Bus error: {}", msg),
-            ModemError::Timeout => write!(f, "AT command timeout"),
-            ModemError::NoModem => write!(f, "no modem found"),
-            ModemError::UnsupportedModem(model) => {
-                write!(f, "unsupported modem model: {}", model)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ModemError {}
 
 /// LTE signal quality measurements.
 #[derive(Default, Debug, Clone)]
@@ -111,137 +41,6 @@ pub struct LteNeighborCell {
 pub struct LteReading {
     pub signal: LteSignalQuality,
     pub neighbors: HashMap<i32, LteNeighborCell>,
-}
-
-/// Abstraction over modem D-Bus operations.
-///
-/// This trait allows testing modem-dependent logic without an actual
-/// ModemManager D-Bus service. The real implementation uses the
-/// `modemmanager` crate (behind the `lte` feature flag).
-#[async_trait]
-pub trait ModemAccess: Send + Sync {
-    /// Get the modem model string.
-    async fn model(&self) -> Result<String, ModemError>;
-
-    /// Send an AT command and return the response string.
-    async fn command(&self, cmd: &str, timeout_ms: u32) -> Result<String, ModemError>;
-}
-
-/// Discover a modem via ModemManager and detect its type.
-///
-/// Returns the detected ModemType and modem accessor, or an error if
-/// no supported modem is found.
-pub async fn discover_modem(modem: &dyn ModemAccess) -> Result<ModemType, ModemError> {
-    let model = modem.model().await?;
-    debug!(model = %model, "modem model detected");
-
-    match detect_modem_type(&model) {
-        Some(modem_type) => {
-            debug!(modem_type = %modem_type, "modem type identified");
-            Ok(modem_type)
-        }
-        None => Err(ModemError::UnsupportedModem(model)),
-    }
-}
-
-/// Send an AT command and return the response.
-///
-/// Wraps the ModemAccess command method with logging and error handling.
-pub async fn send_at_command(
-    modem: &dyn ModemAccess,
-    cmd: &str,
-    timeout_ms: u32,
-) -> Result<String, ModemError> {
-    debug!(cmd = %cmd, timeout_ms = timeout_ms, "sending AT command");
-    let response = modem.command(cmd, timeout_ms).await?;
-    debug!(cmd = %cmd, response_len = response.len(), "AT command response received");
-    Ok(response)
-}
-
-// --- Real ModemManager D-Bus implementation ---
-
-pub mod dbus {
-    use super::*;
-    use modemmanager::dbus::modem::ModemProxy;
-    use zbus::Connection;
-
-    /// Real modem accessor using ModemManager D-Bus service.
-    pub struct DbusModemAccess {
-        connection: Connection,
-        modem_path: String,
-    }
-
-    impl DbusModemAccess {
-        /// Connect to ModemManager and find the first available modem.
-        pub async fn discover() -> Result<Self, ModemError> {
-            let connection = Connection::system()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to connect to system bus: {}", e)))?;
-
-            // Use ObjectManager to enumerate modems under /org/freedesktop/ModemManager1
-            let proxy = zbus::fdo::ObjectManagerProxy::builder(&connection)
-                .destination("org.freedesktop.ModemManager1")
-                .map_err(|e| ModemError::Dbus(format!("failed to build proxy: {}", e)))?
-                .path("/org/freedesktop/ModemManager1")
-                .map_err(|e| ModemError::Dbus(format!("invalid path: {}", e)))?
-                .build()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to create proxy: {}", e)))?;
-
-            let objects = proxy
-                .get_managed_objects()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to enumerate modems: {}", e)))?;
-
-            // Find the first modem object path
-            let modem_path = objects
-                .keys()
-                .find(|path| path.as_str().contains("/Modem/"))
-                .ok_or(ModemError::NoModem)?
-                .to_string();
-
-            debug!(modem_path = %modem_path, "modem found via D-Bus");
-
-            Ok(Self {
-                connection,
-                modem_path,
-            })
-        }
-
-        async fn modem_proxy(&self) -> Result<ModemProxy<'_>, ModemError> {
-            zbus::proxy::Builder::<'_, ModemProxy<'_>>::new(&self.connection)
-                .destination("org.freedesktop.ModemManager1")
-                .map_err(|e| ModemError::Dbus(format!("failed to set destination: {}", e)))?
-                .path(self.modem_path.as_str())
-                .map_err(|e| ModemError::Dbus(format!("invalid modem path: {}", e)))?
-                .build()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to create modem proxy: {}", e)))
-        }
-    }
-
-    #[async_trait]
-    impl ModemAccess for DbusModemAccess {
-        async fn model(&self) -> Result<String, ModemError> {
-            let proxy = self.modem_proxy().await?;
-            proxy
-                .model()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to read model: {}", e)))
-        }
-
-        async fn command(&self, cmd: &str, timeout_ms: u32) -> Result<String, ModemError> {
-            let proxy = self.modem_proxy().await?;
-            proxy.command(cmd, timeout_ms).await.map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("Timeout") || msg.contains("timeout") {
-                    ModemError::Timeout
-                } else {
-                    ModemError::Dbus(format!("AT command failed: {}", e))
-                }
-            })
-        }
-    }
 }
 
 // --- AT Response Parsing ---
@@ -532,33 +331,28 @@ impl Sensor for LteSensor {
         "lte"
     }
 
-    async fn run(&self, _ctx: Arc<Context>, cancel: CancellationToken) {
-        loop {
-            info!("attempting modem discovery via D-Bus");
-            match dbus::DbusModemAccess::discover().await {
-                Ok(modem) => {
-                    self.poll_loop(&modem, &_ctx, &cancel).await;
-                    if cancel.is_cancelled() {
-                        return;
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "modem discovery failed");
-                }
+    async fn run(&self, ctx: Arc<Context>, cancel: CancellationToken) {
+        // Wait for modem to become available in Context (set by modem discovery task)
+        let modem = loop {
+            if let Some(modem) = ctx.get_modem().await {
+                info!("modem available from context, starting LTE polling");
+                break modem;
             }
-
-            // Retry delay on failure
+            debug!("modem not yet available in context, waiting...");
             tokio::select! {
                 _ = cancel.cancelled() => return,
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
             }
-        }
+        };
+
+        self.poll_loop(&*modem, &ctx, &cancel).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::modem_access::ModemError;
     use std::sync::Mutex;
 
     // --- Mock ModemAccess for testing ---
@@ -576,7 +370,7 @@ mod tests {
             }
         }
 
-        fn with_model_error(err: ModemError) -> Self {
+        fn _with_model_error(err: ModemError) -> Self {
             Self {
                 model_response: Err(err),
                 command_responses: Mutex::new(Vec::new()),
@@ -605,177 +399,6 @@ mod tests {
             }
             responses.remove(0)
         }
-    }
-
-    // --- ModemType detection tests ---
-
-    #[test]
-    fn test_detect_simcom_7600() {
-        assert_eq!(
-            detect_modem_type("SIMCOM_SIM7600G-H"),
-            Some(ModemType::Simcom7600)
-        );
-    }
-
-    #[test]
-    fn test_detect_quectel_em12() {
-        assert_eq!(detect_modem_type("EM12"), Some(ModemType::QuectelEm12));
-    }
-
-    #[test]
-    fn test_detect_quectel_em06e() {
-        assert_eq!(detect_modem_type("EM06"), Some(ModemType::QuectelEm06E));
-    }
-
-    #[test]
-    fn test_detect_quectel_em06gl() {
-        assert_eq!(
-            detect_modem_type("EM060K-GL"),
-            Some(ModemType::QuectelEm06GL)
-        );
-    }
-
-    #[test]
-    fn test_detect_unknown_model() {
-        assert_eq!(detect_modem_type("UNKNOWN_MODEM_XYZ"), None);
-    }
-
-    #[test]
-    fn test_detect_empty_model() {
-        assert_eq!(detect_modem_type(""), None);
-    }
-
-    #[test]
-    fn test_detect_em06gl_before_em06e() {
-        // "EM060K-GL" contains "EM06" but should match EM06GL first
-        // because MODEM_IDENTIFIERS checks EM060K-GL before EM06
-        assert_eq!(
-            detect_modem_type("EM060K-GL"),
-            Some(ModemType::QuectelEm06GL)
-        );
-    }
-
-    #[test]
-    fn test_detect_model_with_extra_text() {
-        // ModemManager might return model with extra whitespace or prefix
-        assert_eq!(
-            detect_modem_type("Quectel EM12-G"),
-            Some(ModemType::QuectelEm12)
-        );
-    }
-
-    #[test]
-    fn test_detect_partial_match_simcom() {
-        assert_eq!(
-            detect_modem_type("Some prefix SIMCOM_SIM7600G-H Rev1.0"),
-            Some(ModemType::Simcom7600)
-        );
-    }
-
-    #[test]
-    fn test_modem_type_display() {
-        assert_eq!(format!("{}", ModemType::Simcom7600), "SIMCOM_7600");
-        assert_eq!(format!("{}", ModemType::QuectelEm12), "QUECTEL_EM12");
-        assert_eq!(format!("{}", ModemType::QuectelEm06E), "QUECTEL_EM06E");
-        assert_eq!(format!("{}", ModemType::QuectelEm06GL), "QUECTEL_EM06GL");
-    }
-
-    // --- discover_modem tests ---
-
-    #[tokio::test]
-    async fn test_discover_modem_simcom() {
-        let mock = MockModem::with_model("SIMCOM_SIM7600G-H");
-        let result = discover_modem(&mock).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), ModemType::Simcom7600);
-    }
-
-    #[tokio::test]
-    async fn test_discover_modem_quectel_em12() {
-        let mock = MockModem::with_model("EM12");
-        let result = discover_modem(&mock).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), ModemType::QuectelEm12);
-    }
-
-    #[tokio::test]
-    async fn test_discover_modem_unsupported() {
-        let mock = MockModem::with_model("UNKNOWN_MODEM");
-        let result = discover_modem(&mock).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ModemError::UnsupportedModem(model) => assert_eq!(model, "UNKNOWN_MODEM"),
-            e => panic!("expected UnsupportedModem, got: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_discover_modem_dbus_error() {
-        let mock = MockModem::with_model_error(ModemError::Dbus("connection refused".into()));
-        let result = discover_modem(&mock).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ModemError::Dbus(_) => {}
-            e => panic!("expected Dbus error, got: {:?}", e),
-        }
-    }
-
-    // --- AT command execution tests ---
-
-    #[tokio::test]
-    async fn test_at_command_success() {
-        let mock = MockModem::with_model("EM12")
-            .with_command_response(Ok("+QENG: \"servingcell\",\"NOCONN\"".to_string()));
-        let result = send_at_command(&mock, "AT+QENG=\"servingcell\"", 3000).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "+QENG: \"servingcell\",\"NOCONN\"");
-    }
-
-    #[tokio::test]
-    async fn test_at_command_timeout() {
-        let mock = MockModem::with_model("EM12").with_command_response(Err(ModemError::Timeout));
-        let result = send_at_command(&mock, "AT+QENG=\"servingcell\"", 3000).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ModemError::Timeout => {}
-            e => panic!("expected Timeout, got: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_at_command_dbus_error() {
-        let mock = MockModem::with_model("EM12")
-            .with_command_response(Err(ModemError::Dbus("method call failed".into())));
-        let result = send_at_command(&mock, "AT+CPSI?", 3000).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ModemError::Dbus(msg) => assert!(msg.contains("method call failed")),
-            e => panic!("expected Dbus error, got: {:?}", e),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_at_command_empty_response() {
-        let mock = MockModem::with_model("EM12").with_command_response(Ok(String::new()));
-        let result = send_at_command(&mock, "AT", 3000).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "");
-    }
-
-    // --- ModemError display tests ---
-
-    #[test]
-    fn test_modem_error_display() {
-        assert_eq!(
-            format!("{}", ModemError::Dbus("test".into())),
-            "D-Bus error: test"
-        );
-        assert_eq!(format!("{}", ModemError::Timeout), "AT command timeout");
-        assert_eq!(format!("{}", ModemError::NoModem), "no modem found");
-        assert_eq!(
-            format!("{}", ModemError::UnsupportedModem("FOO".into())),
-            "unsupported modem model: FOO"
-        );
     }
 
     // --- SIMCOM_7600 AT+CPSI? parsing tests ---
@@ -1214,5 +837,81 @@ mod tests {
 
         let reading = ctx.sensors.lte.read().await;
         assert!(reading.is_none());
+    }
+
+    // --- LteSensor::run() tests (modem from Context) ---
+
+    #[tokio::test]
+    async fn test_run_exits_on_cancel_while_waiting_for_modem() {
+        let config = crate::config::tests::test_config();
+        let ctx = crate::context::Context::new(config);
+        let cancel = CancellationToken::new();
+
+        let sensor = LteSensor::new(&LteSensorConfig::default(), 0.01);
+
+        // Don't set modem in context — sensor should wait and then exit on cancel
+        let cancel_clone = cancel.clone();
+        let ctx_clone = Arc::clone(&ctx);
+        let handle = tokio::spawn(async move {
+            sensor.run(ctx_clone, cancel_clone).await;
+        });
+
+        // Give it a moment to start waiting
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        // Should complete without hanging
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("run should exit on cancel")
+            .expect("task should not panic");
+
+        // No readings should have been stored
+        assert!(ctx.sensors.lte.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_run_starts_polling_when_modem_becomes_available() {
+        let config = crate::config::tests::test_config();
+        let ctx = crate::context::Context::new(config);
+        let cancel = CancellationToken::new();
+
+        let sensor = LteSensor::new(&LteSensorConfig::default(), 0.01);
+
+        let cancel_clone = cancel.clone();
+        let ctx_clone = Arc::clone(&ctx);
+        let handle = tokio::spawn(async move {
+            sensor.run(ctx_clone, cancel_clone).await;
+        });
+
+        // Set modem in context after a short delay (simulating async modem discovery)
+        // EM12 alternates serving/neighbor queries, provide enough responses for both
+        let ctx_clone = Arc::clone(&ctx);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mock: Arc<dyn ModemAccess> = Arc::new(
+                MockModem::with_model("EM12")
+                    .with_command_response(Ok(
+                        "+QENG: \"servingcell\",\"NOCONN\",\"LTE\",\"FDD\",310,260,4E00001,311,5110,10,5,5,00A2,-83,-7,-53,18,4,-32768,30".to_string(),
+                    ))
+                    .with_command_response(Ok(
+                        "+QENG: \"neighbourcell intra\",\"LTE\",5110,999,-8,-85,-55,15".to_string(),
+                    ))
+                    .with_command_response(Ok(
+                        "+QENG: \"servingcell\",\"NOCONN\",\"LTE\",\"FDD\",310,260,4E00001,311,5110,10,5,5,00A2,-83,-7,-53,18,4,-32768,30".to_string(),
+                    )),
+            );
+            ctx_clone.set_modem(mock).await;
+        });
+
+        // Wait for modem to be set (retry interval is 1s) + a few poll cycles
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        cancel.cancel();
+        let _ = handle.await;
+
+        // Verify that sensor data was stored from the modem
+        let reading = ctx.sensors.lte.read().await;
+        assert!(reading.is_some());
+        assert_eq!(reading.as_ref().unwrap().signal.pcid, 311);
     }
 }

@@ -6,6 +6,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use crate::config::Config;
 use crate::mavlink::{is_fc_sysid, MavFrame};
 use crate::sensors::SensorValues;
+use crate::services::modem_access::ModemAccess;
 
 /// Shared application context.
 ///
@@ -32,6 +33,9 @@ pub struct Context {
 
     /// Current sensor readings, updated by sensor tasks.
     pub sensors: SensorValues,
+
+    /// Shared modem access service, set after modem discovery completes.
+    pub modem: RwLock<Option<Arc<dyn ModemAccess>>>,
 }
 
 const BROADCAST_CAPACITY: usize = 256;
@@ -54,6 +58,7 @@ impl Context {
                 lte: RwLock::new(None),
                 cpu_temp: RwLock::new(None),
             },
+            modem: RwLock::new(None),
         })
     }
 
@@ -88,6 +93,16 @@ impl Context {
     #[allow(dead_code)] // Used by tests and future switcher component
     pub async fn has_system(&self, system_id: u8) -> bool {
         self.available_systems.read().await.contains(&system_id)
+    }
+
+    /// Store the modem access service after discovery completes.
+    pub async fn set_modem(&self, modem: Arc<dyn ModemAccess>) {
+        *self.modem.write().await = Some(modem);
+    }
+
+    /// Get the modem access service, if available.
+    pub async fn get_modem(&self) -> Option<Arc<dyn ModemAccess>> {
+        self.modem.read().await.clone()
     }
 }
 
@@ -291,6 +306,40 @@ mod tests {
         let stored = ctx.sensors.cpu_temp.read().await;
         let stored = stored.as_ref().unwrap();
         assert_eq!(stored.temperature_c, 42.5);
+    }
+
+    // -- Modem access tests --
+
+    #[tokio::test]
+    async fn test_modem_initially_none() {
+        let ctx = Context::new(test_config());
+        assert!(ctx.get_modem().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_modem() {
+        use crate::services::modem_access::ModemError;
+
+        struct FakeModem;
+
+        #[async_trait::async_trait]
+        impl ModemAccess for FakeModem {
+            async fn model(&self) -> Result<String, ModemError> {
+                Ok("FAKE_MODEM".to_string())
+            }
+            async fn command(&self, _cmd: &str, _timeout_ms: u32) -> Result<String, ModemError> {
+                Ok("OK".to_string())
+            }
+        }
+
+        let ctx = Context::new(test_config());
+        let modem: Arc<dyn ModemAccess> = Arc::new(FakeModem);
+        ctx.set_modem(modem).await;
+
+        let retrieved = ctx.get_modem().await;
+        assert!(retrieved.is_some());
+        let model = retrieved.unwrap().model().await.unwrap();
+        assert_eq!(model, "FAKE_MODEM");
     }
 
     #[tokio::test]

@@ -139,10 +139,15 @@ mavlink-routerd (TCP:5760)
     |       +-- broadcast channel (capacity 256) -- routes messages to subscribers
     |       +-- Context.available_systems -- tracks discovered system IDs
     |
+    +-- ModemAccessService -- serializes modem D-Bus access via request queue
+    |       |
+    |       +-- Discovered at startup, stored in Context
+    |       +-- LteSensor and future consumers access modem through this service
+    |
     +-- SensorManager -- spawns and manages sensor tasks
     |       |
     |       +-- PingSensor -- pings target host, tracks latency and loss
-    |       +-- LteSensor -- reads LTE signal quality via ModemManager D-Bus
+    |       +-- LteSensor -- reads LTE signal quality via modem access service
     |       +-- CpuTempSensor -- reads CPU temperature from sysfs
     |
     +-- MavlinkEnvWriter -- writes mavlink.env at startup, then exits
@@ -155,7 +160,9 @@ mavlink-routerd (TCP:5760)
 
 - **Sniffer** (`mavlink/sniffer_component.rs`) - Connects as MAVLink TCP client (tcpout). Receives all messages and broadcasts them on a channel. Discovers flight controller system IDs from heartbeats (system ID < 200), filtering out internal component IDs.
 
-- **Context** (`context.rs`) - Shared state holding config, broadcast/mpsc channels, discovered system IDs, and sensor values. Thread-safe via Arc and RwLock.
+- **Context** (`context.rs`) - Shared state holding config, broadcast/mpsc channels, discovered system IDs, sensor values, and modem access service. Thread-safe via Arc and RwLock.
+
+- **ModemAccessService** (`services/modem_access.rs`) - Queue-based modem access proxy. Discovers modem via D-Bus at startup with auto-retry, then serializes AT command requests through an internal worker task. Implements `ModemAccess` trait. Stored in Context as `Arc<dyn ModemAccess>`.
 
 - **Commands** (`mavlink/commands.rs`) - Defines 23 custom MAV_CMD_USER_1 subcommands (IDs 31011-31049) for link switching, telemetry, camera, and GPS control.
 
@@ -168,9 +175,8 @@ The sensor subsystem (`sensors/`) provides a trait-based framework for gathering
 - **Sensor trait** - Common interface: `name()` and `async fn run()` with Context and CancellationToken.
 - **SensorManager** - Reads config, builds list of enabled sensors, spawns each as a tokio task.
 - **PingSensor** (`sensors/ping.rs`) - Spawns a `ping` subprocess, sends periodic SIGQUIT to get stats, parses latency and packet loss. Stores `PingReading { reachable, latency_ms, loss_percent }`.
-- **LteSensor** (`sensors/lte.rs`) - Connects to ModemManager via D-Bus, detects modem type (SIMCOM 7600, Quectel EM12/EM06E/EM06GL), sends modem-specific AT commands to read signal quality. Stores `LteReading { signal, neighbors }`.
+- **LteSensor** (`sensors/lte.rs`) - Reads LTE signal quality via modem access service from Context. Waits for modem availability at startup, detects modem type (SIMCOM 7600, Quectel EM12/EM06E/EM06GL), then sends modem-specific AT commands to read signal quality. Stores `LteReading { signal, neighbors }`.
 - **CpuTempSensor** (`sensors/cpu_temp.rs`) - Reads `/sys/class/thermal/thermal_zone0/temp`, converts millidegrees to degrees. Stores `CpuTempReading { temperature_c }`.
-- **ModemControl** (`sensors/lte_control.rs`) - Interface for modem power control and band switching via ModemManager D-Bus (for future use).
 
 Each sensor can be independently enabled/disabled and has a configurable polling interval (with a global default fallback).
 
@@ -185,12 +191,13 @@ The env module (`env/`) generates environment files for external services at sta
 
 1. Parse CLI arguments and load TOML config
 2. Create shared Context with channels and sensor value storage
-3. Spawn env file writers (MavlinkEnvWriter, CameraEnvWriter) — write config-derived env files and exit
-4. Spawn SensorManager (starts enabled sensor tasks)
-5. Spawn drone component and sniffer tasks (with heartbeat loops)
-6. Spawn TelemetryReporter (1Hz sensor value broadcasts)
-7. Wait for flight controller discovery (heartbeat with system ID < 200)
-8. Run until SIGINT/SIGTERM triggers graceful shutdown
+3. Spawn modem discovery as background task (ModemAccessService::start(), stores in Context when ready)
+4. Spawn env file writers (MavlinkEnvWriter, CameraEnvWriter) — write config-derived env files and exit
+5. Spawn SensorManager (starts enabled sensor tasks; LteSensor waits for modem in Context)
+6. Spawn drone component and sniffer tasks (with heartbeat loops)
+7. Spawn TelemetryReporter (1Hz sensor value broadcasts)
+8. Wait for flight controller discovery (heartbeat with system ID < 200)
+9. Run until SIGINT/SIGTERM triggers graceful shutdown
 
 ## Testing
 

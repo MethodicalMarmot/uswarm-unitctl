@@ -141,7 +141,10 @@ impl Default for CpuTempSensorConfig {
 impl MavlinkConfig {
     /// Returns the MAVLink connection string (e.g., "tcpout:127.0.0.1:5760")
     pub fn connection_string(&self) -> String {
-        format!("{}:{}:{}", self.protocol, self.host, self.local_mavlink_port)
+        format!(
+            "{}:{}:{}",
+            self.protocol, self.host, self.local_mavlink_port
+        )
     }
 }
 

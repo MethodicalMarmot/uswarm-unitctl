@@ -43,13 +43,19 @@ cargo run -- --config config.toml --debug
 
 Shared state hub (Arc-wrapped). Holds config, a broadcast channel (capacity 256) for incoming message routing, an mpsc channel (capacity 500) for outgoing messages, and a RwLock-protected HashSet of discovered system IDs. References `SensorValues` from the sensors module.
 
+### Services (`services/`)
+
+Shared services that run as background tasks and are accessed through `Context`.
+
+- **ModemAccessService** (`services/modem_access.rs`) — Queue-based modem access proxy. Owns an mpsc channel; callers submit AT command requests, a single worker task processes them sequentially against D-Bus (enforcing single-threaded D-Bus constraint). Implements `ModemAccess` trait. Handles modem discovery with auto-retry at startup, stored in `Context` as `Arc<dyn ModemAccess>`. Also defines `ModemAccess` trait, `ModemError`, `ModemType`, `NetworkRegistration`, and D-Bus modem integration (`DbusModemAccess`).
+
 ### Sensor Subsystem (`sensors/`)
 
 Trait-based sensor framework. Each sensor implements `Sensor` trait (`name()` + `async fn run()`), runs as its own tokio task at a configurable interval, and stores results in Context's `SensorValues`.
 
 - **SensorManager** (`sensors/mod.rs`) — builds list of enabled sensors from config, spawns each as tokio task with CancellationToken. Also defines `SensorValues` struct.
 - **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess, sends SIGQUIT for stats, parses latency/loss. Defines `PingReading`.
-- **LteSensor** (`sensors/lte.rs`) — ModemManager D-Bus integration, modem detection (SIMCOM 7600, Quectel EM12/EM06E/EM06GL), AT command signal quality parsing, neighbor cell tracking. Defines `LteReading`, `LteSignalQuality`, `LteNeighborCell`.
+- **LteSensor** (`sensors/lte.rs`) — reads modem from Context (via `ModemAccessService`), AT command signal quality parsing, neighbor cell tracking. Defines `LteReading`, `LteSignalQuality`, `LteNeighborCell`.
 - **CpuTempSensor** (`sensors/cpu_temp.rs`) — reads sysfs thermal zone, converts millidegrees to degrees. Defines `CpuTempReading`.
 
 ### Env File Writers (`env/`)
@@ -89,7 +95,10 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `CameraConfig` — camera env file settings: gcs_ip, env_path, video port, resolution, framerate, bitrate, flip, camera_type, device
 - `MavlinkEnvWriter` — writes mavlink env file at startup from mavlink config (defined in `env/mavlink_env.rs`)
 - `CameraEnvWriter` — writes camera env file at startup from camera config (defined in `env/camera_env.rs`)
-- `Context` — shared state with channels, system discovery, and sensor values
+- `ModemAccessService` — queue-based modem access proxy, serializes AT commands through a worker task (defined in `services/modem_access.rs`)
+- `ModemAccess` trait — async modem interface (model, command, imsi, registration_status) defined in `services/modem_access.rs`
+- `NetworkRegistration` — network registration status enum (defined in `services/modem_access.rs`)
+- `Context` — shared state with channels, system discovery, sensor values, and modem access
 - `SensorValues` — RwLock-wrapped optional readings for ping, LTE, and CPU temperature (defined in `sensors/mod.rs`)
 - `PingReading` — reachable, latency_ms, loss_percent (defined in `sensors/ping.rs`)
 - `LteReading` — signal quality, neighbor cells (defined in `sensors/lte.rs`)

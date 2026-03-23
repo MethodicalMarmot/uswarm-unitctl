@@ -599,7 +599,7 @@ mod tests {
         let cancel = CancellationToken::new();
 
         // Take outgoing rx to inspect messages
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         let reporter = make_reporter(Arc::clone(&ctx), cancel.clone());
         let handle = tokio::spawn(async move {
@@ -667,7 +667,7 @@ mod tests {
         let cancel = CancellationToken::new();
 
         // No sensor data set — should still send with default (zero) values
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         let reporter = make_reporter(Arc::clone(&ctx), cancel.clone());
         let handle = tokio::spawn(async move {
@@ -701,7 +701,7 @@ mod tests {
         }
 
         let cancel = CancellationToken::new();
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         let reporter = make_reporter(Arc::clone(&ctx), cancel.clone());
         let handle = tokio::spawn(async move {
@@ -770,7 +770,7 @@ mod tests {
         }
 
         let cancel = CancellationToken::new();
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         let reporter = make_reporter(Arc::clone(&ctx), cancel.clone());
         let handle = tokio::spawn(async move {
@@ -845,7 +845,7 @@ mod tests {
         }
 
         let cancel = CancellationToken::new();
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         let reporter = make_reporter(Arc::clone(&ctx), cancel.clone());
         let handle = tokio::spawn(async move {
@@ -885,7 +885,7 @@ mod tests {
     async fn test_telemetry_stops_on_cancel() {
         let ctx = Context::new(test_config());
         let cancel = CancellationToken::new();
-        let _rx = ctx.take_outgoing_rx().await.unwrap();
+        let _rx = ctx.outgoing_rx.write().await;
 
         let reporter = make_reporter(Arc::clone(&ctx), cancel.clone());
         let handle = tokio::spawn(async move {

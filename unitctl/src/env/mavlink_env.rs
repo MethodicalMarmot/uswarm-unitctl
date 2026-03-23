@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::config::MavlinkConfig;
@@ -9,15 +8,11 @@ use crate::Task;
 
 pub struct MavlinkEnvWriter {
     ctx: Arc<Context>,
-    _cancel: CancellationToken,
 }
 
 impl MavlinkEnvWriter {
-    pub fn new(ctx: Arc<Context>, cancel: CancellationToken) -> Self {
-        Self {
-            ctx,
-            _cancel: cancel,
-        }
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
     }
 }
 
@@ -139,9 +134,8 @@ mod tests {
         config.mavlink.env_path = env_path.to_string_lossy().to_string();
 
         let ctx = Context::new(config);
-        let cancel = CancellationToken::new();
 
-        let writer = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx), cancel));
+        let writer = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx)));
         let handles = writer.run();
 
         for handle in handles {
@@ -169,9 +163,8 @@ mod tests {
         config.mavlink.env_path = env_path.to_string_lossy().to_string();
 
         let ctx = Context::new(config);
-        let cancel = CancellationToken::new();
 
-        let writer = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx), cancel));
+        let writer = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx)));
         let handles = writer.run();
 
         for handle in handles {

@@ -315,7 +315,6 @@ impl ModemAccessService {
             }
         }
     }
-
 }
 
 /// Timeout for waiting on a queued modem request reply.
@@ -323,7 +322,11 @@ const REQUEST_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(
 
 impl ModemAccessService {
     /// Send a request to the worker and await the reply with a timeout.
-    async fn request<T>(&self, request: ModemRequest, rx: oneshot::Receiver<Result<T, ModemError>>) -> Result<T, ModemError> {
+    async fn request<T>(
+        &self,
+        request: ModemRequest,
+        rx: oneshot::Receiver<Result<T, ModemError>>,
+    ) -> Result<T, ModemError> {
         self.tx
             .send(request)
             .await

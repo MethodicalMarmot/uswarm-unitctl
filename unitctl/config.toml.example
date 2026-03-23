@@ -58,3 +58,23 @@ neighbor_expiry_s = 30.0
 [sensors.cpu_temp]
 enabled = true
 # interval_s = 5.0
+
+# MQTT communication with central server
+# Publishes sensor telemetry (LTE, ping, CPU temp) and receives commands
+# (config_update, get_config, update_request, modem_commands).
+# Authentication uses mutual TLS; the node ID is extracted from the client
+# certificate's CN field.
+# Topic structure: {env_prefix}/nodes/{nodeId}/telemetry/{name}
+#                  {env_prefix}/nodes/{nodeId}/cmnd/{cmd}/{in|status|result}
+[mqtt]
+enabled = false
+host = "mqtt.example.com"
+port = 8883
+# Mutual TLS certificate paths (node ID extracted from client certificate CN)
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
+# Environment prefix for MQTT topics (e.g. "prod", "staging")
+env_prefix = "prod"
+# Telemetry publish interval in seconds
+telemetry_interval_s = 1.0

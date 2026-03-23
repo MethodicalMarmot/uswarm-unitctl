@@ -1,5 +1,5 @@
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -17,20 +17,21 @@ pub struct Cli {
     pub debug: bool,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct Config {
     pub general: GeneralConfig,
     pub mavlink: MavlinkConfig,
     pub sensors: SensorsConfig,
     pub camera: CameraConfig,
+    pub mqtt: MqttConfig,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct GeneralConfig {
     pub debug: bool,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct MavlinkConfig {
     pub protocol: String,
     pub host: String,
@@ -48,13 +49,13 @@ pub struct MavlinkConfig {
     pub fc: FcConfig,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct FcConfig {
     pub tty: String,
     pub baudrate: u32,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct CameraConfig {
     pub gcs_ip: String,
     pub env_path: String,
@@ -68,7 +69,7 @@ pub struct CameraConfig {
     pub device: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct SensorsConfig {
     pub default_interval_s: f64,
     pub ping: PingSensorConfig,
@@ -76,7 +77,7 @@ pub struct SensorsConfig {
     pub cpu_temp: CpuTempSensorConfig,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct PingSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
@@ -84,17 +85,29 @@ pub struct PingSensorConfig {
     pub interface: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct LteSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
     pub neighbor_expiry_s: f64,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct CpuTempSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub struct MqttConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub ca_cert_path: String,
+    pub client_cert_path: String,
+    pub client_key_path: String,
+    pub env_prefix: String,
+    pub telemetry_interval_s: f64,
 }
 
 impl Default for SensorsConfig {
@@ -134,6 +147,21 @@ impl Default for CpuTempSensorConfig {
         Self {
             enabled: true,
             interval_s: None,
+        }
+    }
+}
+
+impl Default for MqttConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "mqtt.example.com".to_string(),
+            port: 8883,
+            ca_cert_path: "/etc/unitctl/certs/ca.pem".to_string(),
+            client_cert_path: "/etc/unitctl/certs/client.pem".to_string(),
+            client_key_path: "/etc/unitctl/certs/client.key".to_string(),
+            env_prefix: "prod".to_string(),
+            telemetry_interval_s: 1.0,
         }
     }
 }
@@ -306,6 +334,31 @@ impl Config {
             return Err("sensors.ping.interface must not start with '-'".into());
         }
 
+        // Validate MQTT config (only when enabled)
+        if self.mqtt.enabled {
+            if self.mqtt.host.is_empty() {
+                return Err("mqtt.host must not be empty when MQTT is enabled".into());
+            }
+            if self.mqtt.port == 0 {
+                return Err("mqtt.port must be greater than 0".into());
+            }
+            if self.mqtt.ca_cert_path.is_empty() {
+                return Err("mqtt.ca_cert_path must not be empty when MQTT is enabled".into());
+            }
+            if self.mqtt.client_cert_path.is_empty() {
+                return Err("mqtt.client_cert_path must not be empty when MQTT is enabled".into());
+            }
+            if self.mqtt.client_key_path.is_empty() {
+                return Err("mqtt.client_key_path must not be empty when MQTT is enabled".into());
+            }
+            if self.mqtt.env_prefix.is_empty() {
+                return Err("mqtt.env_prefix must not be empty when MQTT is enabled".into());
+            }
+            if !self.mqtt.telemetry_interval_s.is_finite() || self.mqtt.telemetry_interval_s < 1.0 {
+                return Err("mqtt.telemetry_interval_s must be a finite number >= 1.0".into());
+            }
+        }
+
         Ok(())
     }
 }
@@ -363,6 +416,16 @@ neighbor_expiry_s = 30.0
 
 [sensors.cpu_temp]
 enabled = true
+
+[mqtt]
+enabled = false
+host = "mqtt.example.com"
+port = 8883
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
+env_prefix = "test"
+telemetry_interval_s = 1.0
 "#;
 
     pub fn test_config() -> Config {
@@ -420,6 +483,16 @@ neighbor_expiry_s = 30.0
 
 [sensors.cpu_temp]
 enabled = true
+
+[mqtt]
+enabled = false
+host = "mqtt.example.com"
+port = 8883
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
+env_prefix = "test"
+telemetry_interval_s = 1.0
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.general.debug);
@@ -758,6 +831,16 @@ neighbor_expiry_s = 60.0
 [sensors.cpu_temp]
 enabled = true
 interval_s = 10.0
+
+[mqtt]
+enabled = false
+host = "mqtt.example.com"
+port = 8883
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
+env_prefix = "test"
+telemetry_interval_s = 1.0
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
@@ -1099,5 +1182,184 @@ interval_s = 10.0
         config.mavlink.remote_mavlink_port = 0;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("mavlink.remote_mavlink_port"));
+    }
+
+    #[test]
+    fn test_mqtt_config_parsed() {
+        let config = test_config();
+        assert!(!config.mqtt.enabled);
+        assert_eq!(config.mqtt.host, "mqtt.example.com");
+        assert_eq!(config.mqtt.port, 8883);
+        assert_eq!(config.mqtt.ca_cert_path, "/etc/unitctl/certs/ca.pem");
+        assert_eq!(
+            config.mqtt.client_cert_path,
+            "/etc/unitctl/certs/client.pem"
+        );
+        assert_eq!(config.mqtt.client_key_path, "/etc/unitctl/certs/client.key");
+        assert_eq!(config.mqtt.env_prefix, "test");
+        assert_eq!(config.mqtt.telemetry_interval_s, 1.0);
+    }
+
+    #[test]
+    fn test_mqtt_config_default() {
+        let default = MqttConfig::default();
+        assert!(!default.enabled);
+        assert_eq!(default.host, "mqtt.example.com");
+        assert_eq!(default.port, 8883);
+        assert_eq!(default.telemetry_interval_s, 1.0);
+    }
+
+    #[test]
+    fn test_mqtt_disabled_skips_validation() {
+        let mut config = test_config();
+        config.mqtt.enabled = false;
+        config.mqtt.host = "".to_string();
+        config.mqtt.ca_cert_path = "".to_string();
+        config.mqtt.port = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_mqtt_enabled_empty_host_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.host = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.host"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_zero_port_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.port"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_empty_ca_cert_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.ca_cert_path = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.ca_cert_path"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_empty_client_cert_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.client_cert_path = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.client_cert_path"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_empty_client_key_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.client_key_path = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.client_key_path"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_empty_env_prefix_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.env_prefix = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.env_prefix"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_zero_telemetry_interval_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.telemetry_interval_s = 0.0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.telemetry_interval_s"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_negative_telemetry_interval_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.telemetry_interval_s = -1.0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.telemetry_interval_s"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_inf_telemetry_interval_rejected() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.mqtt.telemetry_interval_s = f64::INFINITY;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("mqtt.telemetry_interval_s"));
+    }
+
+    #[test]
+    fn test_mqtt_enabled_valid_config_accepted() {
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_mqtt_missing_section_fails() {
+        let toml_str = r#"
+[general]
+debug = false
+
+[mavlink]
+protocol = "tcpout"
+host = "127.0.0.1"
+local_mavlink_port = 5760
+remote_mavlink_port = 5760
+self_sysid = 1
+self_compid = 10
+gcs_sysid = 255
+gcs_compid = 190
+sniffer_sysid = 199
+bs_sysid = 200
+iteration_period_ms = 10
+gcs_ip = "10.101.0.1"
+env_path = "/etc/mavlink.env"
+
+[mavlink.fc]
+tty = "/dev/ttyFC"
+baudrate = 57600
+
+[camera]
+gcs_ip = "10.101.0.1"
+env_path = "/etc/camera.env"
+remote_video_port = 5600
+width = 640
+height = 360
+framerate = 60
+bitrate = 1664000
+flip = 0
+camera_type = "rpi"
+device = "/dev/video1"
+
+[sensors]
+default_interval_s = 1.0
+
+[sensors.ping]
+enabled = true
+host = "10.45.0.2"
+interface = ""
+
+[sensors.lte]
+enabled = true
+neighbor_expiry_s = 30.0
+
+[sensors.cpu_temp]
+enabled = true
+"#;
+        let result: Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
     }
 }

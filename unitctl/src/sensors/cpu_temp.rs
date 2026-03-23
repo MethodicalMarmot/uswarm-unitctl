@@ -13,9 +13,8 @@ use super::Sensor;
 const DEFAULT_THERMAL_PATH: &str = "/sys/class/thermal/thermal_zone0/temp";
 
 /// Current CPU temperature reading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CpuTempReading {
-    #[allow(dead_code)] // Written by CPU temp sensor, not yet consumed by telemetry
     pub temperature_c: f64,
 }
 

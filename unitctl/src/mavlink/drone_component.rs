@@ -30,14 +30,7 @@ impl DroneComponent {
     /// Connects to mavlink-routerd via TCP, drains the outgoing message queue,
     /// and sends messages over the wire. Reconnects with 1s backoff on failure.
     pub async fn connect(&self) {
-        let mut outgoing_rx = match self.ctx.take_outgoing_rx().await {
-            Some(rx) => rx,
-            None => {
-                error!("drone component: outgoing rx already taken");
-                return;
-            }
-        };
-
+        let mut outgoing_rx = self.ctx.outgoing_rx.write().await;
         let conn_addr = self.ctx.config.mavlink.connection_string();
 
         loop {
@@ -276,7 +269,7 @@ mod tests {
         let cancel = CancellationToken::new();
 
         // Take the outgoing rx so we can check what gets queued
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         let sysid = ctx.config.mavlink.self_sysid;
         let compid = ctx.config.mavlink.self_compid;
@@ -303,7 +296,7 @@ mod tests {
         let cancel = CancellationToken::new();
 
         // Take the outgoing rx so we can check what gets queued
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         // Pre-add an FC system (ID < 200)
         ctx.add_system(1).await;
@@ -339,7 +332,6 @@ mod tests {
     async fn test_heartbeat_loop_stops_on_cancel() {
         let ctx = Context::new(test_config());
         let cancel = CancellationToken::new();
-        let _rx = ctx.take_outgoing_rx().await.unwrap();
 
         // Pre-add FC so the loop starts
         ctx.add_system(1).await;

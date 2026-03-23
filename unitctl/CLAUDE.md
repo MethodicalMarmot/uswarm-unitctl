@@ -25,13 +25,14 @@ cargo run -- --config config.toml --debug
 
 ## Configuration
 
-- `config.toml` (from `config.toml.example`) — TOML config with sections: general, mavlink, mavlink.fc, camera, sensors
+- `config.toml` (from `config.toml.example`) — TOML config with sections: general, mavlink, mavlink.fc, camera, sensors, mqtt
 - All fields are required — there are no serde defaults. The config file must explicitly specify every value.
 - Config is loaded via `config::load_config()` and parsed with serde
 - Debug logging is enabled by either `--debug` CLI flag or `general.debug = true` in config
 - `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields
 - `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type`, `device`
 - `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`)
+- `[mqtt]` section configures MQTT communication with a central server: `enabled` (bool), `host`, `port` (8883 for TLS), `ca_cert_path`, `client_cert_path`, `client_key_path` (mutual TLS), `env_prefix` (topic namespace), `telemetry_interval_s`
 
 ## Architecture
 
@@ -48,6 +49,16 @@ Shared state hub (Arc-wrapped). Holds config, a broadcast channel (capacity 256)
 Shared services that run as background tasks and are accessed through `Context`.
 
 - **ModemAccessService** (`services/modem_access.rs`) — Queue-based modem access proxy. Owns an mpsc channel; callers submit AT command requests, a single worker task processes them sequentially against D-Bus (enforcing single-threaded D-Bus constraint). Implements `ModemAccess` trait. Handles modem discovery with auto-retry at startup, stored in `Context` as `Arc<dyn ModemAccess>`. Also defines `ModemAccess` trait, `ModemError`, `ModemType`, `NetworkRegistration`, and D-Bus modem integration (`DbusModemAccess`).
+
+### MQTT Service (`services/mqtt/`)
+
+Bidirectional MQTT communication with a central server. Split into transport (connection/TLS/reconnect/pub/sub) and command processing (lifecycle/routing/status). Enabled via `mqtt.enabled` config flag. Node ID is extracted from the client certificate CN field.
+
+- **MqttTransport** (`services/mqtt/transport.rs`) — Wraps rumqttc `AsyncClient` + `EventLoop` with mutual TLS. Handles connection, reconnection, publish/subscribe, and exposes a `broadcast::Sender<MqttEvent>` channel for incoming messages. Provides topic builder methods for telemetry and command topics.
+- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) — Implements `Task` trait. Periodically reads sensor values from `Context.sensors` and publishes JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Skips sensors with no reading.
+- **CommandProcessor** (`services/mqtt/commands.rs`) — Subscribes to `{prefix}/nodes/{nodeId}/cmnd/+/in`, routes incoming commands to registered `CommandHandler` implementations. Manages command lifecycle: TTL check → accepted → in_progress → completed/failed. Publishes status and result to corresponding topics.
+- **TLS helpers** (`services/mqtt/tls.rs`) — `load_tls_config()` loads CA and client certificates for mutual TLS. `extract_node_id()` parses the client certificate and extracts the CN from the X.509 subject.
+- **Command handlers** (`services/mqtt/handlers/`) — `GetConfigHandler` returns current config as JSON. `ConfigUpdateHandler` applies config changes (placeholder). `UpdateRequestHandler` acknowledges update requests (placeholder). `ModemCommandsHandler` routes AT commands through `ModemAccess`.
 
 ### Sensor Subsystem (`sensors/`)
 
@@ -107,7 +118,16 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `Sensor` trait — async sensor interface (name + run)
 - `SensorManager` — spawns enabled sensors as tokio tasks
 - `TelemetryReporter` — 1Hz MAVLink broadcast of sensor values
+- `MqttConfig` — MQTT config: enabled, host, port, cert paths, env_prefix, telemetry_interval_s (defined in `config.rs`)
+- `MqttTransport` — MQTT connection with TLS, reconnect, pub/sub, event broadcast (defined in `services/mqtt/transport.rs`)
+- `MqttEvent` — enum: Connected, Disconnected, Message (defined in `services/mqtt/transport.rs`)
+- `TelemetryPublisher` — periodic sensor JSON publisher over MQTT (defined in `services/mqtt/telemetry.rs`)
+- `CommandProcessor` — command lifecycle manager with handler dispatch (defined in `services/mqtt/commands.rs`)
+- `CommandHandler` trait — async command handler interface (defined in `services/mqtt/commands.rs`)
+- `CommandEnvelope` — incoming command: uuid, issued_at, ttl_sec, payload (defined in `services/mqtt/commands.rs`)
+- `CommandState` — enum: Accepted, InProgress, Completed, Failed, Rejected, Expired (defined in `services/mqtt/commands.rs`)
+- `CommandResult` — command result: extra fields (ok is determined by Ok/Err return type) (defined in `services/mqtt/commands.rs`)
 
 ## Dependencies
 
-tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix
+tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix, rumqttc (use-rustls), serde_json, chrono (serde), x509-parser

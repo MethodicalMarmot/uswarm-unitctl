@@ -5,17 +5,20 @@ mod mavlink;
 mod sensors;
 mod services;
 
-use std::sync::Arc;
-
 use crate::env::{CameraEnvWriter, MavlinkEnvWriter};
 use crate::mavlink::drone_component::DroneComponent;
 use crate::mavlink::sniffer_component::MavlinkSniffer;
 use crate::mavlink::telemetry_reporter::TelemetryReporter;
 use crate::services::modem_access::ModemAccessService;
+use crate::services::mqtt::commands::CommandProcessor;
+use crate::services::mqtt::telemetry::TelemetryPublisher;
+use crate::services::mqtt::transport::MqttTransport;
 use clap::Parser;
 use config::Cli;
 use context::Context;
 use sensors::SensorManager;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -93,10 +96,10 @@ async fn main() {
     handles.push(modem_handle);
 
     // Spawn env file writers first — they write once and exit
-    let mavlink_env = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx), cancel.clone()));
+    let mavlink_env = Arc::new(MavlinkEnvWriter::new(Arc::clone(&ctx)));
     handles.extend(mavlink_env.run());
 
-    let camera_env = Arc::new(CameraEnvWriter::new(Arc::clone(&ctx), cancel.clone()));
+    let camera_env = Arc::new(CameraEnvWriter::new(Arc::clone(&ctx)));
     handles.extend(camera_env.run());
 
     let sensor_manager = Arc::new(SensorManager::new(
@@ -115,7 +118,48 @@ async fn main() {
     let telemetry = Arc::new(TelemetryReporter::new(Arc::clone(&ctx), cancel.clone()));
     handles.extend(telemetry.run());
 
-    // Wait for shutdown signal (tasks run until cancelled)
+    // MQTT service — only started when mqtt.enabled is true
+    if ctx.config.mqtt.enabled {
+        match MqttTransport::new(&ctx.config.mqtt, cancel.clone()) {
+            Ok(transport) => {
+                let transport = Arc::new(transport);
+
+                info!(
+                    host = %ctx.config.mqtt.host,
+                    port = ctx.config.mqtt.port,
+                    node_id = %transport.node_id(),
+                    "MQTT transport initialized"
+                );
+
+                // Create command processor BEFORE spawning the event loop so its
+                // broadcast receiver exists when the first ConnAck/Publish arrives.
+                // With clean_session=false the broker may replay queued messages
+                // immediately on connect; without an active receiver those
+                // broadcasts would be silently dropped.
+                let mut processor = CommandProcessor::new(Arc::clone(&transport), cancel.clone());
+                processor.register_commands(&ctx);
+                processor.subscribe_commands().await;
+                handles.extend(Arc::new(processor).run());
+
+                // Run transport after all commands and has been registered
+                handles.extend(Arc::clone(&transport).run());
+
+                // Run telemetry publisher after transport is initialized
+                let mqtt_telemetry = Arc::new(TelemetryPublisher::new(
+                    Arc::clone(&transport),
+                    Arc::clone(&ctx),
+                    Duration::from_secs_f64(ctx.config.mqtt.telemetry_interval_s),
+                    cancel.clone(),
+                ));
+                handles.extend(mqtt_telemetry.run());
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to initialize MQTT transport, MQTT disabled");
+            }
+        }
+    }
+
+    // Wait for a shutdown signal (tasks run until canceled)
     cancel.cancelled().await;
     info!("shutdown initiated, waiting for tasks to complete");
 

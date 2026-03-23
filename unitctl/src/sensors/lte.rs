@@ -13,7 +13,7 @@ use crate::services::modem_access::{discover_modem, send_at_command, ModemAccess
 use super::Sensor;
 
 /// LTE signal quality measurements.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, serde::Serialize)]
 pub struct LteSignalQuality {
     pub rsrq: i32,
     pub rsrp: i32,
@@ -25,7 +25,7 @@ pub struct LteSignalQuality {
 }
 
 /// A neighboring LTE cell.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LteNeighborCell {
     pub pcid: i32,
     pub rsrp: i32,
@@ -37,7 +37,7 @@ pub struct LteNeighborCell {
 }
 
 /// Current LTE sensor reading.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, serde::Serialize)]
 pub struct LteReading {
     pub signal: LteSignalQuality,
     pub neighbors: HashMap<i32, LteNeighborCell>,

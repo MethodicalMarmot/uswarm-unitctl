@@ -25,8 +25,8 @@ pub struct Context {
     pub tx_outgoing: mpsc::Sender<MavFrame>,
 
     /// Receiver side of the mpsc channel for outgoing MAVLink messages.
-    /// Only the drone component holds this (via `take_outgoing_rx`).
-    outgoing_rx: RwLock<Option<mpsc::Receiver<MavFrame>>>,
+    /// Only the drone component should hold the write lock on this.
+    pub outgoing_rx: RwLock<mpsc::Receiver<MavFrame>>,
 
     /// Set of discovered flight controller system IDs (from heartbeats).
     pub available_systems: RwLock<HashSet<u8>>,
@@ -51,7 +51,7 @@ impl Context {
             config,
             tx_broadcast,
             tx_outgoing,
-            outgoing_rx: RwLock::new(Some(rx_outgoing)),
+            outgoing_rx: RwLock::new(rx_outgoing),
             available_systems: RwLock::new(HashSet::new()),
             sensors: SensorValues {
                 ping: RwLock::new(None),
@@ -66,12 +66,6 @@ impl Context {
     #[allow(dead_code)] // Used by sniffer tests and future switcher component
     pub fn subscribe_broadcast(&self) -> broadcast::Receiver<MavFrame> {
         self.tx_broadcast.subscribe()
-    }
-
-    /// Take the outgoing message receiver. Can only be called once (by the drone component).
-    /// Returns `None` if already taken.
-    pub async fn take_outgoing_rx(&self) -> Option<mpsc::Receiver<MavFrame>> {
-        self.outgoing_rx.write().await.take()
     }
 
     /// Retrieves a set of Flight Controller (FC) system IDs.
@@ -169,19 +163,10 @@ mod tests {
 
         ctx.tx_outgoing.send((header, msg)).await.unwrap();
 
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
         let (rx_header, _rx_msg) = rx.recv().await.unwrap();
         assert_eq!(rx_header.system_id, 1);
         assert_eq!(rx_header.component_id, 10);
-    }
-
-    #[tokio::test]
-    async fn test_take_outgoing_rx_only_once() {
-        let ctx = Context::new(test_config());
-        let first = ctx.take_outgoing_rx().await;
-        assert!(first.is_some());
-        let second = ctx.take_outgoing_rx().await;
-        assert!(second.is_none());
     }
 
     #[tokio::test]

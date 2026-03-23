@@ -422,7 +422,7 @@ mod tests {
         });
 
         // Heartbeat loop should be waiting for FC - no messages sent yet
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
         let result = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await;
         assert!(
             result.is_err(),
@@ -438,7 +438,7 @@ mod tests {
     async fn test_heartbeat_loop_starts_after_fc_discovery() {
         let ctx = Context::new(test_config());
         let cancel = CancellationToken::new();
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
 
         // Pre-add a FC system (ID < 200)
         ctx.add_system(1).await;
@@ -474,7 +474,6 @@ mod tests {
     async fn test_heartbeat_loop_stops_on_cancel() {
         let ctx = Context::new(test_config());
         let cancel = CancellationToken::new();
-        let _rx = ctx.take_outgoing_rx().await.unwrap();
 
         // Pre-add FC so the loop starts
         ctx.add_system(1).await;
@@ -503,7 +502,7 @@ mod tests {
         ctx.add_system(200).await;
         ctx.add_system(255).await;
 
-        let mut rx = ctx.take_outgoing_rx().await.unwrap();
+        let mut rx = ctx.outgoing_rx.write().await;
         let sysid = ctx.config.mavlink.sniffer_sysid;
         let compid = ctx.config.mavlink.self_compid;
         let cancel_clone = cancel.clone();

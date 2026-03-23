@@ -24,6 +24,11 @@ The binary is produced at `target/release/unitctl`.
 - modemmanager (ModemManager D-Bus client for LTE modem communication)
 - zbus (D-Bus transport)
 - nix (POSIX signals for ping subprocess control)
+- rumqttc (MQTT client with mutual TLS via rustls)
+- serde_json (JSON serialization for MQTT payloads)
+- uuid (command UUID generation)
+- chrono (ISO 8601 timestamps)
+- x509-parser (X.509 certificate parsing for node ID extraction)
 
 ## Prerequisites
 
@@ -31,6 +36,8 @@ The binary is produced at `target/release/unitctl`.
 - A flight controller connected to mavlink-routerd (unitctl blocks on startup until an FC heartbeat is detected)
 - `ping` command available in PATH (used by the ping sensor for connectivity monitoring)
 - ModemManager D-Bus service running (required for LTE sensor)
+- MQTT broker accessible at the configured host:port (when `mqtt.enabled = true`)
+- Mutual TLS certificates: CA cert, client cert, and client key issued by a private CA (the client certificate CN is used as the node ID)
 
 ## Usage
 
@@ -117,6 +124,16 @@ bitrate = 1664000            # Camera bitrate
 flip = 0                     # Camera flip: 0=none, 1=horizontal, 2=vertical, 3=both
 camera_type = "rpi"          # Camera type identifier
 device = "/dev/video1"       # Camera device path
+
+[mqtt]
+enabled = false              # Enable MQTT communication with central server
+host = "mqtt.example.com"   # MQTT broker hostname
+port = 8883                  # MQTT broker port (8883 for TLS)
+ca_cert_path = "/etc/unitctl/certs/ca.pem"       # CA certificate
+client_cert_path = "/etc/unitctl/certs/client.pem" # Client certificate (CN = node ID)
+client_key_path = "/etc/unitctl/certs/client.key"   # Client private key
+env_prefix = "prod"          # Topic namespace prefix (e.g. "prod", "staging")
+telemetry_interval_s = 1.0   # Sensor telemetry publish interval in seconds
 ```
 
 All sections and fields must be present in the config file. The only optional field is `interval_s` on each sensor, which overrides `default_interval_s` when set.
@@ -152,6 +169,14 @@ mavlink-routerd (TCP:5760)
     |
     +-- MavlinkEnvWriter -- writes mavlink.env at startup, then exits
     +-- CameraEnvWriter -- writes camera.env at startup, then exits
+    |
+    +-- MqttTransport (when mqtt.enabled = true) -- mutual TLS connection to broker
+            |
+            +-- TelemetryPublisher -- publishes sensor JSON to MQTT broker
+            +-- CommandProcessor -- receives and executes commands from central server
+                    |
+                    +-- GetConfigHandler, ConfigUpdateHandler,
+                        UpdateRequestHandler, ModemCommandsHandler
 ```
 
 ### Components
@@ -167,6 +192,15 @@ mavlink-routerd (TCP:5760)
 - **Commands** (`mavlink/commands.rs`) - Defines 23 custom MAV_CMD_USER_1 subcommands (IDs 31011-31049) for link switching, telemetry, camera, and GPS control.
 
 - **Telemetry Reporter** (`mavlink/telemetry_reporter.rs`) - Reads sensor values from Context at 1Hz and broadcasts them as COMMAND_LONG (MAV_CMD_USER_1) messages to both GCS and base station. Reports LTE radio telemetry (subcmd 31014), LTE IP telemetry with ping data (subcmd 31015), and up to 10 neighbor cells (subcmds 31040-31049).
+
+### MQTT Service
+
+When `mqtt.enabled = true`, unitctl connects to a central MQTT broker using mutual TLS for bidirectional communication.
+
+- **MqttTransport** (`services/mqtt/transport.rs`) - Manages broker connection with mutual TLS. Handles reconnection, publish/subscribe, and broadcasts incoming messages on an event channel. Node ID is extracted from the client certificate CN.
+- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) - Periodically reads sensor values from Context and publishes them as JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Sensors with no reading are skipped.
+- **CommandProcessor** (`services/mqtt/commands.rs`) - Subscribes to command topics, dispatches to registered handlers, and manages the command lifecycle (accepted -> in_progress -> completed/failed). Supports TTL-based expiry.
+- **Command Handlers** (`services/mqtt/handlers/`) - `get_config` returns current config, `config_update` applies changes (placeholder), `update_request` acknowledges updates (placeholder), `modem_commands` routes AT commands through ModemAccess.
 
 ### Sensor Subsystem
 
@@ -196,8 +230,9 @@ The env module (`env/`) generates environment files for external services at sta
 5. Spawn SensorManager (starts enabled sensor tasks; LteSensor waits for modem in Context)
 6. Spawn drone component and sniffer tasks (with heartbeat loops)
 7. Spawn TelemetryReporter (1Hz sensor value broadcasts)
-8. Wait for flight controller discovery (heartbeat with system ID < 200)
-9. Run until SIGINT/SIGTERM triggers graceful shutdown
+8. If `mqtt.enabled`: create MqttTransport, spawn event loop, TelemetryPublisher, and CommandProcessor with registered handlers
+9. Wait for flight controller discovery (heartbeat with system ID < 200)
+10. Run until SIGINT/SIGTERM triggers graceful shutdown
 
 ## Testing
 
@@ -205,7 +240,7 @@ The env module (`env/`) generates environment files for external services at sta
 cargo test
 ```
 
-Tests cover config parsing, custom command encoding/decoding, channel behavior, heartbeat construction, message queue drain, system discovery, integration with a mock TCP server, sensor value parsing (ping output, AT command responses, sysfs temperature), sensor manager construction, telemetry message construction, concurrent sensor value access, and env file content generation and file write verification.
+Tests cover config parsing, custom command encoding/decoding, channel behavior, heartbeat construction, message queue drain, system discovery, integration with a mock TCP server, sensor value parsing (ping output, AT command responses, sysfs temperature), sensor manager construction, telemetry message construction, concurrent sensor value access, env file content generation, MQTT config parsing, topic building, telemetry JSON serialization, command envelope parsing, command lifecycle state transitions, TTL expiry, and handler dispatch. Integration tests with a Docker Mosquitto broker (mutual TLS) are available via `./tests/run_mqtt_tests.sh`.
 
 ## Linting
 

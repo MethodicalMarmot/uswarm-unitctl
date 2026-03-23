@@ -36,7 +36,7 @@ impl PingSensor {
 }
 
 /// Current ping sensor reading.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PingReading {
     pub reachable: bool,
     pub latency_ms: f64,

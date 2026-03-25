@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use tracing::{info, warn};
 
 use crate::context::Context;
-use crate::services::mqtt::commands::{
-    CommandEnvelope, CommandError, CommandHandler, CommandResult,
+use crate::messages::commands::{
+    CommandEnvelope, CommandPayload, CommandResultData, ModemCommandResult,
 };
+use crate::services::mqtt::commands::{CommandError, CommandHandler, CommandResult};
 
 /// Default AT command timeout in milliseconds.
 const DEFAULT_AT_TIMEOUT_MS: u32 = 5000;
@@ -39,11 +40,19 @@ const QUERY_ONLY_AT_PREFIXES: &[&str] = &[
 
 /// Check if an AT command is in the allowlist.
 fn is_allowed_at_command(cmd: &str) -> bool {
-    let upper = cmd.trim().to_uppercase();
+    let trimmed = cmd.trim();
 
-    // Reject control characters and semicolons to prevent AT command injection.
-    // Semicolons allow command chaining on some modems (e.g., AT+CSQ;AT+CFUN=0).
-    if upper.chars().any(|c| c.is_control() || c == ';') {
+    // Reject non-ASCII input to prevent Unicode look-alike bypasses
+    // (e.g., fullwidth characters like ＡＴ＋ＣＳＱ).
+    if !trimmed.bytes().all(|b| b.is_ascii() && !b.is_ascii_control()) {
+        return false;
+    }
+
+    let upper = trimmed.to_uppercase();
+
+    // Reject semicolons to prevent AT command chaining
+    // (e.g., AT+CSQ;AT+CFUN=0).
+    if upper.contains(';') {
         return false;
     }
 
@@ -85,11 +94,14 @@ impl ModemCommandsHandler {
 #[async_trait]
 impl CommandHandler for ModemCommandsHandler {
     async fn handle(&self, envelope: &CommandEnvelope) -> Result<CommandResult, CommandError> {
-        let at_command = envelope
-            .payload
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CommandError::new("missing 'command' field in payload"))?;
+        let typed_payload = match &envelope.payload {
+            CommandPayload::ModemCommands(p) => p,
+            _ => {
+                return Err(CommandError::new("expected ModemCommands payload"));
+            }
+        };
+
+        let at_command = &typed_payload.command;
 
         if !is_allowed_at_command(at_command) {
             warn!(
@@ -103,11 +115,8 @@ impl CommandHandler for ModemCommandsHandler {
             )));
         }
 
-        let timeout_ms = envelope
-            .payload
-            .get("timeout_ms")
-            .and_then(|v| v.as_u64())
-            .map(|v| u32::try_from(v).unwrap_or(MAX_AT_TIMEOUT_MS))
+        let timeout_ms = typed_payload
+            .timeout_ms
             .unwrap_or(DEFAULT_AT_TIMEOUT_MS)
             .min(MAX_AT_TIMEOUT_MS);
 
@@ -131,11 +140,12 @@ impl CommandHandler for ModemCommandsHandler {
                     command = %at_command,
                     "AT command succeeded"
                 );
+                let result = ModemCommandResult {
+                    command: at_command.clone(),
+                    response,
+                };
                 Ok(CommandResult {
-                    extra: serde_json::json!({
-                        "command": at_command,
-                        "response": response,
-                    }),
+                    data: CommandResultData::ModemCommands(result),
                 })
             }
             Err(e) => {
@@ -158,6 +168,7 @@ impl CommandHandler for ModemCommandsHandler {
 mod tests {
     use super::*;
     use crate::config::tests::test_config;
+    use crate::messages::commands::ModemCommandPayload;
     use crate::services::modem_access::{ModemAccess, ModemError};
     use chrono::Utc;
 
@@ -176,12 +187,22 @@ mod tests {
         }
     }
 
-    fn make_envelope(payload: serde_json::Value) -> CommandEnvelope {
+    fn make_envelope(command: &str, timeout_ms: Option<u32>) -> CommandEnvelope {
         CommandEnvelope {
             uuid: "test-uuid-modem".to_string(),
             issued_at: Utc::now(),
             ttl_sec: 300,
-            payload,
+            payload: CommandPayload::ModemCommands(ModemCommandPayload {
+                command: command.to_string(),
+                timeout_ms,
+            }),
+        }
+    }
+
+    fn extract_result(result: &CommandResult) -> &ModemCommandResult {
+        match &result.data {
+            CommandResultData::ModemCommands(r) => r,
+            _ => panic!("expected ModemCommands result"),
         }
     }
 
@@ -194,13 +215,12 @@ mod tests {
         ctx.set_modem(modem).await;
 
         let handler = ModemCommandsHandler::new(ctx);
-        let envelope = make_envelope(serde_json::json!({
-            "command": "AT+CSQ",
-        }));
+        let envelope = make_envelope("AT+CSQ", None);
 
         let result = handler.handle(&envelope).await.unwrap();
-        assert_eq!(result.extra["command"], "AT+CSQ");
-        assert_eq!(result.extra["response"], "+CSQ: 15,99");
+        let typed = extract_result(&result);
+        assert_eq!(typed.command, "AT+CSQ");
+        assert_eq!(typed.response, "+CSQ: 15,99");
     }
 
     #[tokio::test]
@@ -212,24 +232,26 @@ mod tests {
         ctx.set_modem(modem).await;
 
         let handler = ModemCommandsHandler::new(ctx);
-        let envelope = make_envelope(serde_json::json!({
-            "command": "ATI",
-            "timeout_ms": 10000,
-        }));
+        let envelope = make_envelope("ATI", Some(10000));
 
         let result = handler.handle(&envelope).await.unwrap();
-        assert!(result.extra.is_object());
+        extract_result(&result); // just verify it's the right variant
     }
 
     #[tokio::test]
-    async fn test_modem_command_missing_command_field() {
+    async fn test_modem_command_wrong_payload_variant() {
         let ctx = Context::new(test_config());
         let handler = ModemCommandsHandler::new(ctx);
 
-        let envelope = make_envelope(serde_json::json!({}));
+        let envelope = CommandEnvelope {
+            uuid: "test-uuid-modem".to_string(),
+            issued_at: Utc::now(),
+            ttl_sec: 300,
+            payload: CommandPayload::GetConfig(crate::messages::commands::GetConfigPayload {}),
+        };
 
         let err = handler.handle(&envelope).await.unwrap_err();
-        assert!(err.message.contains("missing 'command' field"));
+        assert!(err.message.contains("expected ModemCommands payload"));
     }
 
     #[tokio::test]
@@ -238,9 +260,7 @@ mod tests {
         // Don't set modem — it stays None
 
         let handler = ModemCommandsHandler::new(ctx);
-        let envelope = make_envelope(serde_json::json!({
-            "command": "AT+CSQ",
-        }));
+        let envelope = make_envelope("AT+CSQ", None);
 
         let err = handler.handle(&envelope).await.unwrap_err();
         assert!(err.message.contains("modem not available"));
@@ -255,9 +275,7 @@ mod tests {
         ctx.set_modem(modem).await;
 
         let handler = ModemCommandsHandler::new(ctx);
-        let envelope = make_envelope(serde_json::json!({
-            "command": "AT+CSQ",
-        }));
+        let envelope = make_envelope("AT+CSQ", None);
 
         let err = handler.handle(&envelope).await.unwrap_err();
         assert!(err.message.contains("AT command"));
@@ -317,12 +335,27 @@ mod tests {
         ctx.set_modem(modem).await;
 
         let handler = ModemCommandsHandler::new(ctx);
-        let envelope = make_envelope(serde_json::json!({
-            "command": "AT+CFUN=0",
-        }));
+        let envelope = make_envelope("AT+CFUN=0", None);
 
         let err = handler.handle(&envelope).await.unwrap_err();
         assert!(err.message.contains("not allowed"));
+    }
+
+    #[tokio::test]
+    async fn test_modem_command_result_is_typed() {
+        let ctx = Context::new(test_config());
+        let modem = Arc::new(MockModem {
+            response: Ok("+CSQ: 15,99".to_string()),
+        });
+        ctx.set_modem(modem).await;
+
+        let handler = ModemCommandsHandler::new(ctx);
+        let envelope = make_envelope("AT+CSQ", None);
+
+        let result = handler.handle(&envelope).await.unwrap();
+        let typed = extract_result(&result);
+        assert_eq!(typed.command, "AT+CSQ");
+        assert_eq!(typed.response, "+CSQ: 15,99");
     }
 
     #[tokio::test]
@@ -334,9 +367,7 @@ mod tests {
         ctx.set_modem(modem).await;
 
         let handler = ModemCommandsHandler::new(ctx);
-        let envelope = make_envelope(serde_json::json!({
-            "command": "ATI",
-        }));
+        let envelope = make_envelope("ATI", None);
 
         let err = handler.handle(&envelope).await.unwrap_err();
         assert!(err.message.contains("failed"));

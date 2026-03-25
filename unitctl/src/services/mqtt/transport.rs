@@ -1,9 +1,8 @@
-use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS, Transport};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -20,43 +19,14 @@ pub enum MqttEvent {
 }
 
 /// Errors from the MQTT transport layer.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TransportError {
-    Tls(tls::TlsError),
-    Client(rumqttc::ClientError),
+    #[error("TLS error: {0}")]
+    Tls(#[from] tls::TlsError),
+    #[error("MQTT client error: {0}")]
+    Client(#[from] rumqttc::ClientError),
+    #[error("invalid config: {0}")]
     InvalidConfig(String),
-}
-
-impl fmt::Display for TransportError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TransportError::Tls(e) => write!(f, "TLS error: {e}"),
-            TransportError::Client(e) => write!(f, "MQTT client error: {e}"),
-            TransportError::InvalidConfig(e) => write!(f, "invalid config: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for TransportError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            TransportError::Tls(e) => Some(e),
-            TransportError::Client(e) => Some(e),
-            TransportError::InvalidConfig(_) => None,
-        }
-    }
-}
-
-impl From<tls::TlsError> for TransportError {
-    fn from(e: tls::TlsError) -> Self {
-        TransportError::Tls(e)
-    }
-}
-
-impl From<rumqttc::ClientError> for TransportError {
-    fn from(e: rumqttc::ClientError) -> Self {
-        TransportError::Client(e)
-    }
 }
 
 /// MQTT topic special characters that must not appear in node_id or env_prefix.
@@ -89,7 +59,7 @@ pub struct MqttTransport {
     node_id: String,
     env_prefix: String,
     event_tx: broadcast::Sender<MqttEvent>,
-    eventloop: Mutex<EventLoop>,
+    eventloop: Mutex<Option<EventLoop>>,
     cancel: CancellationToken,
 }
 
@@ -107,8 +77,13 @@ impl Task for MqttTransport {
         );
 
         let transport = Arc::clone(&self);
+        let mut eventloop = transport
+            .eventloop
+            .lock()
+            .expect("eventloop mutex poisoned")
+            .take()
+            .expect("eventloop already taken — run() must only be called once");
         vec![tokio::spawn(async move {
-            let mut eventloop = transport.eventloop.lock().await;
             loop {
                 tokio::select! {
                     _ = transport.cancel.cancelled() => {
@@ -182,7 +157,7 @@ impl MqttTransport {
             node_id,
             env_prefix: config.env_prefix.clone(),
             event_tx,
-            eventloop: Mutex::new(eventloop),
+            eventloop: Mutex::new(Some(eventloop)),
             cancel,
         })
     }
@@ -226,10 +201,10 @@ impl MqttTransport {
     ///
     /// Returns `{env_prefix}/nodes/{node_id}/cmnd/{cmd}/{suffix}`
     pub fn command_topic(&self, cmd: &str, suffix: &str) -> String {
-        if suffix.is_empty() {
-            format!("{}/nodes/{}/cmnd/{}", self.env_prefix, self.node_id, cmd)
-        } else if suffix.is_empty() && cmd.is_empty() {
+        if cmd.is_empty() && suffix.is_empty() {
             format!("{}/nodes/{}/cmnd", self.env_prefix, self.node_id)
+        } else if suffix.is_empty() {
+            format!("{}/nodes/{}/cmnd/{}", self.env_prefix, self.node_id, cmd)
         } else {
             format!(
                 "{}/nodes/{}/cmnd/{}/{}",
@@ -258,7 +233,7 @@ impl MqttTransport {
             node_id,
             env_prefix,
             event_tx,
-            eventloop: Mutex::new(eventloop),
+            eventloop: Mutex::new(Some(eventloop)),
             cancel: CancellationToken::new(),
         }
     }
@@ -279,7 +254,7 @@ mod tests {
             node_id: node_id.to_string(),
             env_prefix: env_prefix.to_string(),
             event_tx,
-            eventloop: Mutex::new(eventloop),
+            eventloop: Mutex::new(Some(eventloop)),
             cancel: CancellationToken::new(),
         }
     }

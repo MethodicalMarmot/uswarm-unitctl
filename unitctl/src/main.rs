@@ -2,6 +2,7 @@ mod config;
 mod context;
 mod env;
 mod mavlink;
+pub mod messages;
 mod sensors;
 mod services;
 
@@ -243,12 +244,12 @@ mod tests {
         let manager = Arc::new(SensorManager {
             ctx: Arc::clone(&ctx),
             cancel: cancel.clone(),
-            sensors: Mutex::new(vec![Box::new(TestSensor {
+            sensors: Mutex::new(Some(vec![Box::new(TestSensor {
                 started: Arc::clone(&started),
                 stopped: Arc::clone(&stopped),
-            })]),
+            })])),
         });
-        assert_eq!(manager.sensors.lock().unwrap().len(), 1);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
 
         // Spawn sensors — same pattern as main.rs wiring
         manager.run();
@@ -286,7 +287,7 @@ mod tests {
             &ctx.config.sensors,
         ));
         // Default config has all 3 sensors enabled
-        assert_eq!(sensor_manager.sensors.lock().unwrap().len(), 3);
+        assert_eq!(sensor_manager.sensors.lock().unwrap().as_ref().unwrap().len(), 3);
 
         // Spawn all — should not panic
         sensor_manager.run();

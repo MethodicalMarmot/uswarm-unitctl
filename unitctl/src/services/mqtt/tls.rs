@@ -4,36 +4,14 @@ use rumqttc::TlsConfiguration;
 use x509_parser::pem::parse_x509_pem;
 
 /// Errors that can occur during TLS certificate operations.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TlsError {
-    Io(io::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
+    #[error("certificate parse error: {0}")]
     CertParse(String),
+    #[error("no CN found in certificate subject")]
     NoCommonName,
-}
-
-impl std::fmt::Display for TlsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TlsError::Io(e) => write!(f, "I/O error: {e}"),
-            TlsError::CertParse(e) => write!(f, "certificate parse error: {e}"),
-            TlsError::NoCommonName => write!(f, "no CN found in certificate subject"),
-        }
-    }
-}
-
-impl std::error::Error for TlsError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            TlsError::Io(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<io::Error> for TlsError {
-    fn from(e: io::Error) -> Self {
-        TlsError::Io(e)
-    }
 }
 
 /// Load TLS configuration for mutual TLS authentication with an MQTT broker.

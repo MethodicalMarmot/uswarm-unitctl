@@ -83,8 +83,14 @@ impl MavlinkSniffer {
                     info!("sniffer: shutdown in recv loop");
                     // Wait briefly for the blocking recv task to finish rather
                     // than detaching it. This prevents orphaned blocking tasks
-                    // from holding the connection Arc. Bounded by the protocol's
-                    // read timeout (tcpout: ~100ms in the mavlink crate).
+                    // from holding the connection Arc.
+                    //
+                    // ASSUMPTION: The connection uses tcpout protocol (enforced by
+                    // Config::validate() via VALID_PROTOCOLS), which has a ~100ms
+                    // read timeout in the mavlink crate. The 500ms timeout here
+                    // provides a generous margin. If the blocking task doesn't
+                    // finish in time, it is detached — the Arc<Connection> may
+                    // remain alive until the OS socket timeout expires.
                     let _ =
                         tokio::time::timeout(Duration::from_millis(500), &mut recv_handle).await;
                     return false;

@@ -7,16 +7,11 @@ use tracing::{debug, warn};
 
 use crate::config::CpuTempSensorConfig;
 use crate::context::Context;
+use crate::messages::telemetry::CpuTempTelemetry;
 
 use super::Sensor;
 
 const DEFAULT_THERMAL_PATH: &str = "/sys/class/thermal/thermal_zone0/temp";
-
-/// Current CPU temperature reading.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CpuTempReading {
-    pub temperature_c: f64,
-}
 
 /// CPU temperature sensor that reads from sysfs thermal zone.
 pub struct CpuTempSensor {
@@ -54,7 +49,7 @@ impl Sensor for CpuTempSensor {
             match read_temperature(&self.thermal_path) {
                 Ok(temperature_c) => {
                     debug!(temperature_c, "cpu temperature reading");
-                    *ctx.sensors.cpu_temp.write().await = Some(CpuTempReading { temperature_c });
+                    *ctx.sensors.cpu_temp.write().await = Some(CpuTempTelemetry { temperature_c });
                 }
                 Err(e) => {
                     warn!(error = %e, path = %self.thermal_path, "failed to read cpu temperature");
@@ -88,19 +83,12 @@ pub fn parse_temperature(content: &str) -> Result<f64, TempReadError> {
     Ok(millidegrees as f64 / 1000.0)
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum TempReadError {
-    Io(std::io::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("parse error: {0}")]
     Parse(String),
-}
-
-impl std::fmt::Display for TempReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TempReadError::Io(e) => write!(f, "io error: {}", e),
-            TempReadError::Parse(msg) => write!(f, "parse error: {}", msg),
-        }
-    }
 }
 
 #[cfg(test)]

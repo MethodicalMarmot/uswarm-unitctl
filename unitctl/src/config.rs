@@ -1,6 +1,21 @@
 use clap::Parser;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Errors that can occur when loading or validating configuration.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    /// Failed to read the configuration file.
+    #[error("failed to read configuration file: {0}")]
+    Io(#[from] std::io::Error),
+    /// Failed to parse the configuration file as TOML.
+    #[error("failed to parse configuration: {0}")]
+    Parse(#[from] toml::de::Error),
+    /// Configuration values failed validation.
+    #[error("invalid configuration: {0}")]
+    Validation(String),
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -17,7 +32,7 @@ pub struct Cli {
     pub debug: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct Config {
     pub general: GeneralConfig,
     pub mavlink: MavlinkConfig,
@@ -26,12 +41,12 @@ pub struct Config {
     pub mqtt: MqttConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct GeneralConfig {
     pub debug: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct MavlinkConfig {
     pub protocol: String,
     pub host: String,
@@ -49,13 +64,13 @@ pub struct MavlinkConfig {
     pub fc: FcConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct FcConfig {
     pub tty: String,
     pub baudrate: u32,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct CameraConfig {
     pub gcs_ip: String,
     pub env_path: String,
@@ -69,7 +84,7 @@ pub struct CameraConfig {
     pub device: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct SensorsConfig {
     pub default_interval_s: f64,
     pub ping: PingSensorConfig,
@@ -77,7 +92,7 @@ pub struct SensorsConfig {
     pub cpu_temp: CpuTempSensorConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct PingSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
@@ -85,20 +100,20 @@ pub struct PingSensorConfig {
     pub interface: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct LteSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
     pub neighbor_expiry_s: f64,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct CpuTempSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct MqttConfig {
     pub enabled: bool,
     pub host: String,
@@ -176,7 +191,7 @@ impl MavlinkConfig {
     }
 }
 
-pub fn load_config(path: &std::path::Path) -> Result<Config, Box<dyn std::error::Error>> {
+pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     let content = std::fs::read_to_string(path)?;
     let config: Config = toml::from_str(&content)?;
     config.validate()?;
@@ -196,94 +211,133 @@ const VALID_PROTOCOLS: &[&str] = &["tcpout"];
 
 impl Config {
     /// Validate configuration values that could cause runtime panics or incorrect behavior.
-    pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         if self.mavlink.iteration_period_ms == 0 {
-            return Err("mavlink.iteration_period_ms must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "mavlink.iteration_period_ms must be greater than 0".to_string(),
+            ));
         }
         if !VALID_PROTOCOLS.contains(&self.mavlink.protocol.as_str()) {
-            return Err(format!(
+            return Err(ConfigError::Validation(format!(
                 "mavlink.protocol must be one of {:?}, got {:?}",
                 VALID_PROTOCOLS, self.mavlink.protocol
-            )
-            .into());
+            )));
         }
         let m = &self.mavlink;
         if m.self_sysid == m.sniffer_sysid {
-            return Err("mavlink.self_sysid must differ from sniffer_sysid".into());
+            return Err(ConfigError::Validation(
+                "mavlink.self_sysid must differ from sniffer_sysid".to_string(),
+            ));
         }
         if m.self_sysid == m.bs_sysid {
-            return Err("mavlink.self_sysid must differ from bs_sysid".into());
+            return Err(ConfigError::Validation(
+                "mavlink.self_sysid must differ from bs_sysid".to_string(),
+            ));
         }
         if m.sniffer_sysid == m.bs_sysid {
-            return Err("mavlink.sniffer_sysid must differ from bs_sysid".into());
+            return Err(ConfigError::Validation(
+                "mavlink.sniffer_sysid must differ from bs_sysid".to_string(),
+            ));
         }
         if m.self_sysid == m.gcs_sysid {
-            return Err("mavlink.self_sysid must differ from gcs_sysid".into());
+            return Err(ConfigError::Validation(
+                "mavlink.self_sysid must differ from gcs_sysid".to_string(),
+            ));
         }
         if m.gcs_sysid == m.sniffer_sysid {
-            return Err("mavlink.gcs_sysid must differ from sniffer_sysid".into());
+            return Err(ConfigError::Validation(
+                "mavlink.gcs_sysid must differ from sniffer_sysid".to_string(),
+            ));
         }
         if m.gcs_sysid == m.bs_sysid {
-            return Err("mavlink.gcs_sysid must differ from bs_sysid".into());
+            return Err(ConfigError::Validation(
+                "mavlink.gcs_sysid must differ from bs_sysid".to_string(),
+            ));
         }
         if m.env_path.is_empty() {
-            return Err("mavlink.env_path must not be empty".into());
+            return Err(ConfigError::Validation(
+                "mavlink.env_path must not be empty".to_string(),
+            ));
         }
         if m.gcs_ip.is_empty() || m.gcs_ip.starts_with('-') {
-            return Err(
-                "mavlink.gcs_ip must be a non-empty value that does not start with '-'".into(),
-            );
+            return Err(ConfigError::Validation(
+                "mavlink.gcs_ip must be a non-empty value that does not start with '-'".to_string(),
+            ));
         }
         if m.fc.tty.is_empty() {
-            return Err("mavlink.fc.tty must not be empty".into());
+            return Err(ConfigError::Validation(
+                "mavlink.fc.tty must not be empty".to_string(),
+            ));
         }
         if m.fc.baudrate == 0 {
-            return Err("mavlink.fc.baudrate must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "mavlink.fc.baudrate must be greater than 0".to_string(),
+            ));
         }
         if m.local_mavlink_port == 0 {
-            return Err("mavlink.local_mavlink_port must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "mavlink.local_mavlink_port must be greater than 0".to_string(),
+            ));
         }
         if m.remote_mavlink_port == 0 {
-            return Err("mavlink.remote_mavlink_port must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "mavlink.remote_mavlink_port must be greater than 0".to_string(),
+            ));
         }
 
         // Validate camera config
         let c = &self.camera;
         if c.env_path.is_empty() {
-            return Err("camera.env_path must not be empty".into());
+            return Err(ConfigError::Validation(
+                "camera.env_path must not be empty".to_string(),
+            ));
         }
         if c.gcs_ip.is_empty() || c.gcs_ip.starts_with('-') {
-            return Err(
-                "camera.gcs_ip must be a non-empty value that does not start with '-'".into(),
-            );
+            return Err(ConfigError::Validation(
+                "camera.gcs_ip must be a non-empty value that does not start with '-'".to_string(),
+            ));
         }
         if c.camera_type.is_empty() {
-            return Err("camera.camera_type must not be empty".into());
+            return Err(ConfigError::Validation(
+                "camera.camera_type must not be empty".to_string(),
+            ));
         }
         if c.device.is_empty() {
-            return Err("camera.device must not be empty".into());
+            return Err(ConfigError::Validation(
+                "camera.device must not be empty".to_string(),
+            ));
         }
         if c.width == 0 {
-            return Err("camera.width must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "camera.width must be greater than 0".to_string(),
+            ));
         }
         if c.height == 0 {
-            return Err("camera.height must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "camera.height must be greater than 0".to_string(),
+            ));
         }
         if c.framerate == 0 {
-            return Err("camera.framerate must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "camera.framerate must be greater than 0".to_string(),
+            ));
         }
         if c.bitrate == 0 {
-            return Err("camera.bitrate must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "camera.bitrate must be greater than 0".to_string(),
+            ));
         }
         if c.remote_video_port == 0 {
-            return Err("camera.remote_video_port must be greater than 0".into());
+            return Err(ConfigError::Validation(
+                "camera.remote_video_port must be greater than 0".to_string(),
+            ));
         }
 
         // Validate mavlink.host
         if m.host.is_empty() || m.host.starts_with('-') {
-            return Err(
-                "mavlink.host must be a non-empty value that does not start with '-'".into(),
-            );
+            return Err(ConfigError::Validation(
+                "mavlink.host must be a non-empty value that does not start with '-'".to_string(),
+            ));
         }
 
         // Validate string config values don't contain newlines (prevents env variable injection
@@ -299,63 +353,108 @@ impl Config {
             ("camera.device", c.device.as_str()),
         ] {
             if value.contains('\n') || value.contains('\r') {
-                return Err(format!("{field} must not contain newline characters").into());
+                return Err(ConfigError::Validation(format!(
+                    "{field} must not contain newline characters"
+                )));
             }
         }
 
         // Validate sensor intervals (must be finite and positive; TOML allows inf/nan)
         if !self.sensors.default_interval_s.is_finite() || self.sensors.default_interval_s <= 0.0 {
-            return Err("sensors.default_interval_s must be a finite positive number".into());
+            return Err(ConfigError::Validation(
+                "sensors.default_interval_s must be a finite positive number".to_string(),
+            ));
         }
         if let Some(v) = self.sensors.ping.interval_s {
             if !v.is_finite() || v <= 0.0 {
-                return Err("sensors.ping.interval_s must be a finite positive number".into());
+                return Err(ConfigError::Validation(
+                    "sensors.ping.interval_s must be a finite positive number".to_string(),
+                ));
             }
         }
         if let Some(v) = self.sensors.lte.interval_s {
             if !v.is_finite() || v <= 0.0 {
-                return Err("sensors.lte.interval_s must be a finite positive number".into());
+                return Err(ConfigError::Validation(
+                    "sensors.lte.interval_s must be a finite positive number".to_string(),
+                ));
             }
         }
         if let Some(v) = self.sensors.cpu_temp.interval_s {
             if !v.is_finite() || v <= 0.0 {
-                return Err("sensors.cpu_temp.interval_s must be a finite positive number".into());
+                return Err(ConfigError::Validation(
+                    "sensors.cpu_temp.interval_s must be a finite positive number".to_string(),
+                ));
             }
         }
         if !self.sensors.lte.neighbor_expiry_s.is_finite()
             || self.sensors.lte.neighbor_expiry_s <= 0.0
         {
-            return Err("sensors.lte.neighbor_expiry_s must be a finite positive number".into());
+            return Err(ConfigError::Validation(
+                "sensors.lte.neighbor_expiry_s must be a finite positive number".to_string(),
+            ));
         }
         if self.sensors.ping.host.is_empty() || self.sensors.ping.host.starts_with('-') {
-            return Err("sensors.ping.host must be a valid hostname or IP address".into());
+            return Err(ConfigError::Validation(
+                "sensors.ping.host must be a valid hostname or IP address".to_string(),
+            ));
         }
-        if !self.sensors.ping.interface.is_empty() && self.sensors.ping.interface.starts_with('-') {
-            return Err("sensors.ping.interface must not start with '-'".into());
+        if !self.sensors.ping.interface.is_empty() {
+            if self.sensors.ping.interface.starts_with('-') {
+                return Err(ConfigError::Validation(
+                    "sensors.ping.interface must not start with '-'".to_string(),
+                ));
+            }
+            if !self
+                .sensors
+                .ping
+                .interface
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+            {
+                return Err(ConfigError::Validation(
+                    "sensors.ping.interface must contain only alphanumeric, '.', '_', or '-' characters".to_string(),
+                ));
+            }
         }
 
         // Validate MQTT config (only when enabled)
         if self.mqtt.enabled {
             if self.mqtt.host.is_empty() {
-                return Err("mqtt.host must not be empty when MQTT is enabled".into());
+                return Err(ConfigError::Validation(
+                    "mqtt.host must not be empty when MQTT is enabled".to_string(),
+                ));
             }
             if self.mqtt.port == 0 {
-                return Err("mqtt.port must be greater than 0".into());
+                return Err(ConfigError::Validation(
+                    "mqtt.port must be greater than 0".to_string(),
+                ));
             }
             if self.mqtt.ca_cert_path.is_empty() {
-                return Err("mqtt.ca_cert_path must not be empty when MQTT is enabled".into());
+                return Err(ConfigError::Validation(
+                    "mqtt.ca_cert_path must not be empty when MQTT is enabled".to_string(),
+                ));
             }
             if self.mqtt.client_cert_path.is_empty() {
-                return Err("mqtt.client_cert_path must not be empty when MQTT is enabled".into());
+                return Err(ConfigError::Validation(
+                    "mqtt.client_cert_path must not be empty when MQTT is enabled".to_string(),
+                ));
             }
             if self.mqtt.client_key_path.is_empty() {
-                return Err("mqtt.client_key_path must not be empty when MQTT is enabled".into());
+                return Err(ConfigError::Validation(
+                    "mqtt.client_key_path must not be empty when MQTT is enabled".to_string(),
+                ));
             }
             if self.mqtt.env_prefix.is_empty() {
-                return Err("mqtt.env_prefix must not be empty when MQTT is enabled".into());
+                return Err(ConfigError::Validation(
+                    "mqtt.env_prefix must not be empty when MQTT is enabled".to_string(),
+                ));
             }
-            if !self.mqtt.telemetry_interval_s.is_finite() || self.mqtt.telemetry_interval_s < 1.0 {
-                return Err("mqtt.telemetry_interval_s must be a finite number >= 1.0".into());
+            if !self.mqtt.telemetry_interval_s.is_finite()
+                || self.mqtt.telemetry_interval_s < 1.0
+            {
+                return Err(ConfigError::Validation(
+                    "mqtt.telemetry_interval_s must be a finite number >= 1.0".to_string(),
+                ));
             }
         }
 

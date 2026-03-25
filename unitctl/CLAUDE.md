@@ -55,19 +55,20 @@ Shared services that run as background tasks and are accessed through `Context`.
 Bidirectional MQTT communication with a central server. Split into transport (connection/TLS/reconnect/pub/sub) and command processing (lifecycle/routing/status). Enabled via `mqtt.enabled` config flag. Node ID is extracted from the client certificate CN field.
 
 - **MqttTransport** (`services/mqtt/transport.rs`) — Wraps rumqttc `AsyncClient` + `EventLoop` with mutual TLS. Handles connection, reconnection, publish/subscribe, and exposes a `broadcast::Sender<MqttEvent>` channel for incoming messages. Provides topic builder methods for telemetry and command topics.
-- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) — Implements `Task` trait. Periodically reads sensor values from `Context.sensors` and publishes JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Skips sensors with no reading.
-- **CommandProcessor** (`services/mqtt/commands.rs`) — Subscribes to `{prefix}/nodes/{nodeId}/cmnd/+/in`, routes incoming commands to registered `CommandHandler` implementations. Manages command lifecycle: TTL check → accepted → in_progress → completed/failed. Publishes status and result to corresponding topics.
+- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) — Implements `Task` trait. Periodically reads sensor values from `Context.sensors`, wraps them in `TelemetryEnvelope` (non-generic, with `TelemetryData` enum) from the messages module, and publishes JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Skips sensors with no reading.
+- **CommandProcessor** (`services/mqtt/commands.rs`) — Subscribes to `{prefix}/nodes/{nodeId}/cmnd/+/in`, deserializes incoming commands into typed `CommandEnvelope` (non-generic, with `CommandPayload` enum) from the messages module, routes to registered `CommandHandler` implementations. Manages command lifecycle: TTL check → accepted → in_progress → completed/failed. Publishes status and result using `CommandResultMsg` (non-generic, with `CommandResultData` enum) to corresponding topics.
 - **TLS helpers** (`services/mqtt/tls.rs`) — `load_tls_config()` loads CA and client certificates for mutual TLS. `extract_node_id()` parses the client certificate and extracts the CN from the X.509 subject.
-- **Command handlers** (`services/mqtt/handlers/`) — `GetConfigHandler` returns current config as JSON. `ConfigUpdateHandler` applies config changes (placeholder). `UpdateRequestHandler` acknowledges update requests (placeholder). `ModemCommandsHandler` routes AT commands through `ModemAccess`.
+- **Command handlers** (`services/mqtt/handlers/`) — `GetConfigHandler` returns `GetConfigResult` with `SafeConfig`. `ConfigUpdateHandler` uses `ConfigUpdatePayload`/`ConfigUpdateResult` (placeholder). `UpdateRequestHandler` uses `UpdateRequestPayload`/`UpdateRequestResult` (placeholder). `ModemCommandsHandler` uses `ModemCommandPayload`/`ModemCommandResult` to route AT commands through `ModemAccess`.
+- **Messages module** (`messages/`) — Typed message structs for all MQTT messages. Contains `telemetry.rs` (telemetry data types and `TelemetryEnvelope` with `TelemetryData` enum), `commands.rs` (command payload/result types, `CommandEnvelope` with `CommandPayload` enum, `CommandResultMsg` with `CommandResultData` enum, `CommandStatus`, `SafeConfig`), and `schema.rs` (JSON Schema generation via `schemars`). Schemas are pre-generated into `assets/schema/` by running `cargo test` (not at build time; `build.rs` only creates directory structure).
 
 ### Sensor Subsystem (`sensors/`)
 
 Trait-based sensor framework. Each sensor implements `Sensor` trait (`name()` + `async fn run()`), runs as its own tokio task at a configurable interval, and stores results in Context's `SensorValues`.
 
 - **SensorManager** (`sensors/mod.rs`) — builds list of enabled sensors from config, spawns each as tokio task with CancellationToken. Also defines `SensorValues` struct.
-- **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess, sends SIGQUIT for stats, parses latency/loss. Defines `PingReading`.
-- **LteSensor** (`sensors/lte.rs`) — reads modem from Context (via `ModemAccessService`), AT command signal quality parsing, neighbor cell tracking. Defines `LteReading`, `LteSignalQuality`, `LteNeighborCell`.
-- **CpuTempSensor** (`sensors/cpu_temp.rs`) — reads sysfs thermal zone, converts millidegrees to degrees. Defines `CpuTempReading`.
+- **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess, sends SIGQUIT for stats, parses latency/loss. Uses `PingTelemetry` from messages module (aliased as `PingReading`).
+- **LteSensor** (`sensors/lte.rs`) — reads modem from Context (via `ModemAccessService`), AT command signal quality parsing, neighbor cell tracking. Uses `LteNeighborCell` from messages module. Defines `LteReading` (sensor-internal, HashMap-based) and `LteSignalQuality`.
+- **CpuTempSensor** (`sensors/cpu_temp.rs`) — reads sysfs thermal zone, converts millidegrees to degrees. Uses `CpuTempTelemetry` from messages module (aliased as `CpuTempReading`).
 
 ### Env File Writers (`env/`)
 
@@ -111,9 +112,12 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `NetworkRegistration` — network registration status enum (defined in `services/modem_access.rs`)
 - `Context` — shared state with channels, system discovery, sensor values, and modem access
 - `SensorValues` — RwLock-wrapped optional readings for ping, LTE, and CPU temperature (defined in `sensors/mod.rs`)
-- `PingReading` — reachable, latency_ms, loss_percent (defined in `sensors/ping.rs`)
-- `LteReading` — signal quality, neighbor cells (defined in `sensors/lte.rs`)
-- `CpuTempReading` — temperature_c (defined in `sensors/cpu_temp.rs`)
+- `PingTelemetry` — reachable, latency_ms, loss_percent (defined in `messages/telemetry.rs`; aliased as `PingReading` in `sensors/ping.rs`)
+- `LteTelemetry` — signal quality fields and neighbor cells (defined in `messages/telemetry.rs`)
+- `LteNeighborCell` — neighbor cell data: pcid, rsrp, rsrq, rssi, rssnr, earfcn, last_seen (defined in `messages/telemetry.rs`)
+- `CpuTempTelemetry` — temperature_c (defined in `messages/telemetry.rs`; aliased as `CpuTempReading` in `sensors/cpu_temp.rs`)
+- `TelemetryEnvelope` — non-generic envelope: `ts` timestamp + `data: TelemetryData` enum (defined in `messages/telemetry.rs`)
+- `TelemetryData` — `#[serde(tag = "type")]` enum: Ping, Lte, CpuTemp variants (defined in `messages/telemetry.rs`)
 - `Task` trait — component interface (`run() -> Vec<JoinHandle>`) defined in `main.rs`
 - `Sensor` trait — async sensor interface (name + run)
 - `SensorManager` — spawns enabled sensors as tokio tasks
@@ -124,10 +128,18 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `TelemetryPublisher` — periodic sensor JSON publisher over MQTT (defined in `services/mqtt/telemetry.rs`)
 - `CommandProcessor` — command lifecycle manager with handler dispatch (defined in `services/mqtt/commands.rs`)
 - `CommandHandler` trait — async command handler interface (defined in `services/mqtt/commands.rs`)
-- `CommandEnvelope` — incoming command: uuid, issued_at, ttl_sec, payload (defined in `services/mqtt/commands.rs`)
-- `CommandState` — enum: Accepted, InProgress, Completed, Failed, Rejected, Expired (defined in `services/mqtt/commands.rs`)
-- `CommandResult` — command result: extra fields (ok is determined by Ok/Err return type) (defined in `services/mqtt/commands.rs`)
+- `CommandEnvelope` — non-generic incoming command: uuid, issued_at, ttl_sec, `payload: CommandPayload` (defined in `messages/commands.rs`)
+- `CommandPayload` — `#[serde(tag = "type")]` enum: GetConfig, ConfigUpdate, ModemCommands, UpdateRequest variants (defined in `messages/commands.rs`)
+- `CommandState` — enum: Accepted, InProgress, Completed, Failed, Rejected, Expired, Superseded (defined in `messages/commands.rs`)
+- `CommandResultMsg` — non-generic command result: uuid, ok, ts, error, `data: Option<CommandResultData>` (defined in `messages/commands.rs`)
+- `CommandResultData` — `#[serde(tag = "type")]` enum: GetConfig, ConfigUpdate, ModemCommands, UpdateRequest variants (defined in `messages/commands.rs`)
+- `CommandStatus` — command status update: uuid, state, ts (defined in `messages/commands.rs`)
+- `SafeConfig` — Config with sensitive fields (cert paths, keys) redacted for MQTT exposure (defined in `messages/commands.rs`)
+- `GetConfigPayload`/`GetConfigResult` — get_config command types (defined in `messages/commands.rs`)
+- `ConfigUpdatePayload`/`ConfigUpdateResult` — config_update command types (defined in `messages/commands.rs`)
+- `UpdateRequestPayload`/`UpdateRequestResult` — update_request command types (defined in `messages/commands.rs`)
+- `ModemCommandPayload`/`ModemCommandResult` — modem_commands command types (defined in `messages/commands.rs`)
 
 ## Dependencies
 
-tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix, rumqttc (use-rustls), serde_json, chrono (serde), x509-parser
+tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix, rumqttc (use-rustls), serde_json, chrono (serde), x509-parser, schemars (chrono feature, also in build-dependencies)

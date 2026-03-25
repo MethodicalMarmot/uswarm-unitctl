@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::PingSensorConfig;
 use crate::context::Context;
+use crate::messages::telemetry::PingTelemetry;
 
 use super::Sensor;
 
@@ -35,23 +36,6 @@ impl PingSensor {
     }
 }
 
-/// Current ping sensor reading.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PingReading {
-    pub reachable: bool,
-    pub latency_ms: f64,
-    pub loss_percent: u8,
-}
-
-impl Default for PingReading {
-    fn default() -> Self {
-        Self {
-            reachable: false,
-            latency_ms: 0.0,
-            loss_percent: 100,
-        }
-    }
-}
 
 #[async_trait]
 impl Sensor for PingSensor {
@@ -104,7 +88,7 @@ async fn run_ping_subprocess(
     let mut cmd = Command::new("ping");
 
     if !interface.is_empty() {
-        cmd.arg(format!("-I{}", interface));
+        cmd.arg("-I").arg(interface);
     }
     cmd.arg("-q").arg("-i0.2").arg(host);
     cmd.kill_on_drop(true);
@@ -167,7 +151,7 @@ async fn run_ping_subprocess(
                 sigquit_cancel.cancel();
                 let _ = sigquit_handle.await;
                 // Mark as unreachable on process exit
-                let reading = PingReading {
+                let reading = PingTelemetry {
                     reachable: false,
                     latency_ms: 0.0,
                     loss_percent: 100,
@@ -235,11 +219,11 @@ pub fn parse_ping_line(re: &Regex, line: &str) -> Option<PingStats> {
     })
 }
 
-/// Compute a PingReading from parsed stats, using delta-based loss calculation.
+/// Compute a PingTelemetry from parsed stats, using delta-based loss calculation.
 ///
 /// Tracks previous sent/received counts to calculate loss over the most recent
 /// interval rather than cumulative loss.
-pub fn compute_reading(stats: &PingStats, prev_sent: &mut u64, prev_rcvd: &mut u64) -> PingReading {
+pub fn compute_reading(stats: &PingStats, prev_sent: &mut u64, prev_rcvd: &mut u64) -> PingTelemetry {
     let delta_sent = stats.packets_sent.saturating_sub(*prev_sent);
     let delta_rcvd = stats.packets_rcvd.saturating_sub(*prev_rcvd);
 
@@ -251,7 +235,7 @@ pub fn compute_reading(stats: &PingStats, prev_sent: &mut u64, prev_rcvd: &mut u
     let reachable = stats.latency_ms.is_some() && loss_percent < 100;
     let latency_ms = stats.latency_ms.unwrap_or(0.0);
 
-    PingReading {
+    PingTelemetry {
         reachable,
         latency_ms,
         loss_percent,

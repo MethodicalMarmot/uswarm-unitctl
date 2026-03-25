@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use tracing::info;
 
-use crate::services::mqtt::commands::{
-    CommandEnvelope, CommandError, CommandHandler, CommandResult,
+use crate::messages::commands::{
+    CommandEnvelope, CommandPayload, CommandResultData, ConfigUpdateResult,
 };
+use crate::services::mqtt::commands::{CommandError, CommandHandler, CommandResult};
 
 /// Handler for `config_update` commands.
 ///
@@ -27,9 +28,16 @@ impl CommandHandler for ConfigUpdateHandler {
             "Config update requested (placeholder)"
         );
 
+        let typed_payload = match &envelope.payload {
+            CommandPayload::ConfigUpdate(p) => p,
+            _ => {
+                return Err(CommandError::new("expected ConfigUpdate payload"));
+            }
+        };
+
         // Placeholder: log what fields were requested to change.
         // Real implementation would validate and apply config changes.
-        let fields: Vec<String> = envelope
+        let fields: Vec<String> = typed_payload
             .payload
             .as_object()
             .map(|obj| obj.keys().cloned().collect())
@@ -41,11 +49,13 @@ impl CommandHandler for ConfigUpdateHandler {
             "Config update fields received"
         );
 
+        let result = ConfigUpdateResult {
+            message: "config update acknowledged (placeholder)".to_string(),
+            fields_received: fields,
+        };
+
         Ok(CommandResult {
-            extra: serde_json::json!({
-                "message": "config update acknowledged (placeholder)",
-                "fields_received": fields,
-            }),
+            data: CommandResultData::ConfigUpdate(result),
         })
     }
 }
@@ -53,6 +63,7 @@ impl CommandHandler for ConfigUpdateHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::commands::ConfigUpdatePayload;
     use chrono::Utc;
 
     fn make_envelope(payload: serde_json::Value) -> CommandEnvelope {
@@ -60,7 +71,14 @@ mod tests {
             uuid: "test-uuid-config-update".to_string(),
             issued_at: Utc::now(),
             ttl_sec: 300,
-            payload,
+            payload: CommandPayload::ConfigUpdate(ConfigUpdatePayload { payload }),
+        }
+    }
+
+    fn extract_result(result: &CommandResult) -> &ConfigUpdateResult {
+        match &result.data {
+            CommandResultData::ConfigUpdate(r) => r,
+            _ => panic!("expected ConfigUpdate result"),
         }
     }
 
@@ -75,10 +93,7 @@ mod tests {
         }));
 
         let result = handler.handle(&envelope).await.unwrap();
-        assert_eq!(
-            result.extra["fields_received"],
-            serde_json::json!(["sensors"])
-        );
+        assert_eq!(extract_result(&result).fields_received, vec!["sensors"]);
     }
 
     #[tokio::test]
@@ -88,18 +103,36 @@ mod tests {
         let envelope = make_envelope(serde_json::json!({}));
 
         let result = handler.handle(&envelope).await.unwrap();
-        let fields = result.extra["fields_received"].as_array().unwrap();
-        assert!(fields.is_empty());
+        assert!(extract_result(&result).fields_received.is_empty());
     }
 
     #[tokio::test]
-    async fn test_config_update_handler_non_object_payload() {
+    async fn test_config_update_handler_wrong_payload_variant() {
         let handler = ConfigUpdateHandler::new();
 
-        let envelope = make_envelope(serde_json::json!("not an object"));
+        let envelope = CommandEnvelope {
+            uuid: "test-uuid-config-update".to_string(),
+            issued_at: Utc::now(),
+            ttl_sec: 300,
+            payload: CommandPayload::GetConfig(crate::messages::commands::GetConfigPayload {}),
+        };
+
+        let err = handler.handle(&envelope).await.unwrap_err();
+        assert!(err.message.contains("expected ConfigUpdate payload"));
+    }
+
+    #[tokio::test]
+    async fn test_config_update_handler_result_is_typed() {
+        let handler = ConfigUpdateHandler::new();
+
+        let envelope = make_envelope(serde_json::json!({
+            "sensors": { "ping": { "enabled": false } },
+            "mqtt": { "telemetry_interval_s": 5.0 }
+        }));
 
         let result = handler.handle(&envelope).await.unwrap();
-        let fields = result.extra["fields_received"].as_array().unwrap();
-        assert!(fields.is_empty());
+        let typed = extract_result(&result);
+        assert_eq!(typed.fields_received.len(), 2);
+        assert!(typed.message.contains("placeholder"));
     }
 }

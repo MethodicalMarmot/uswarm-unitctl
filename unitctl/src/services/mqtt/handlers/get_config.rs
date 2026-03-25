@@ -4,13 +4,15 @@ use async_trait::async_trait;
 use tracing::info;
 
 use crate::context::Context;
-use crate::services::mqtt::commands::{
-    CommandEnvelope, CommandError, CommandHandler, CommandResult,
+use crate::messages::commands::{
+    CommandEnvelope, CommandPayload, CommandResultData, GetConfigResult, SafeConfig,
 };
+use crate::services::mqtt::commands::{CommandError, CommandHandler, CommandResult};
 
 /// Handler for `get_config` commands.
 ///
 /// Reads the current configuration from Context and returns it as JSON.
+/// Uses `SafeConfig` to redact sensitive fields (TLS cert paths).
 pub struct GetConfigHandler {
     ctx: Arc<Context>,
 }
@@ -22,33 +24,24 @@ impl GetConfigHandler {
     }
 }
 
-/// Keys to redact from MQTT config before publishing (contain filesystem paths to secrets).
-const REDACTED_MQTT_KEYS: &[&str] = &["ca_cert_path", "client_cert_path", "client_key_path"];
-
 #[async_trait]
 impl CommandHandler for GetConfigHandler {
     async fn handle(&self, envelope: &CommandEnvelope) -> Result<CommandResult, CommandError> {
-        info!(uuid = %envelope.uuid, "Get config requested");
-
-        let mut config_json = serde_json::to_value(&self.ctx.config)
-            .map_err(|e| CommandError::new(format!("failed to serialize config: {e}")))?;
-
-        // Redact sensitive certificate paths from the mqtt section
-        if let Some(mqtt) = config_json.get_mut("mqtt").and_then(|v| v.as_object_mut()) {
-            for key in REDACTED_MQTT_KEYS {
-                if mqtt.contains_key(*key) {
-                    mqtt.insert(
-                        (*key).to_string(),
-                        serde_json::Value::String("***".to_string()),
-                    );
-                }
+        match &envelope.payload {
+            CommandPayload::GetConfig(_) => {}
+            _ => {
+                return Err(CommandError::new("expected GetConfig payload"));
             }
         }
 
+        info!(uuid = %envelope.uuid, "Get config requested");
+
+        let result = GetConfigResult {
+            config: SafeConfig::from(&self.ctx.config),
+        };
+
         Ok(CommandResult {
-            extra: serde_json::json!({
-                "config": config_json,
-            }),
+            data: CommandResultData::GetConfig(Box::new(result)),
         })
     }
 }
@@ -57,6 +50,7 @@ impl CommandHandler for GetConfigHandler {
 mod tests {
     use super::*;
     use crate::config::tests::test_config;
+    use crate::messages::commands::{CommandEnvelope, CommandPayload, GetConfigPayload};
     use chrono::Utc;
 
     fn make_envelope() -> CommandEnvelope {
@@ -64,7 +58,14 @@ mod tests {
             uuid: "test-uuid-get-config".to_string(),
             issued_at: Utc::now(),
             ttl_sec: 300,
-            payload: serde_json::json!({}),
+            payload: CommandPayload::GetConfig(GetConfigPayload {}),
+        }
+    }
+
+    fn extract_config(result: &CommandResult) -> &GetConfigResult {
+        match &result.data {
+            CommandResultData::GetConfig(ref r) => r,
+            _ => panic!("expected GetConfig result"),
         }
     }
 
@@ -74,14 +75,11 @@ mod tests {
         let handler = GetConfigHandler::new(ctx);
 
         let result = handler.handle(&make_envelope()).await.unwrap();
-        let config = &result.extra["config"];
-        assert!(config.is_object());
+        let config = &extract_config(&result).config;
         // Verify key config sections are present
-        assert!(config["general"].is_object());
-        assert!(config["mavlink"].is_object());
-        assert!(config["sensors"].is_object());
-        assert!(config["camera"].is_object());
-        assert!(config["mqtt"].is_object());
+        assert!(!config.general.debug); // test_config has debug=false
+        assert!(!config.mavlink.host.is_empty());
+        assert!(!config.mqtt.host.is_empty());
     }
 
     #[tokio::test]
@@ -90,12 +88,11 @@ mod tests {
         let handler = GetConfigHandler::new(ctx);
 
         let result = handler.handle(&make_envelope()).await.unwrap();
-        let config = &result.extra["config"];
+        let config = &extract_config(&result).config;
 
-        // Verify some specific values from test_config
-        assert_eq!(config["general"]["debug"], false);
-        assert_eq!(config["mavlink"]["host"], "127.0.0.1");
-        assert_eq!(config["mqtt"]["enabled"], false);
+        assert!(!config.general.debug);
+        assert_eq!(config.mavlink.host, "127.0.0.1");
+        assert!(!config.mqtt.enabled);
     }
 
     #[tokio::test]
@@ -104,9 +101,42 @@ mod tests {
         let handler = GetConfigHandler::new(ctx);
 
         let result = handler.handle(&make_envelope()).await.unwrap();
-        let mqtt = &result.extra["config"]["mqtt"];
-        assert_eq!(mqtt["ca_cert_path"], "***");
-        assert_eq!(mqtt["client_cert_path"], "***");
-        assert_eq!(mqtt["client_key_path"], "***");
+        let mqtt = &extract_config(&result).config.mqtt;
+        assert_eq!(mqtt.ca_cert_path, "***");
+        assert_eq!(mqtt.client_cert_path, "***");
+        assert_eq!(mqtt.client_key_path, "***");
+    }
+
+    #[tokio::test]
+    async fn test_get_config_handler_uses_safe_config() {
+        let ctx = Context::new(test_config());
+        let handler = GetConfigHandler::new(ctx);
+
+        let result = handler.handle(&make_envelope()).await.unwrap();
+        let config = &extract_config(&result).config;
+        assert_eq!(config.mqtt.ca_cert_path, "***");
+        assert_eq!(config.mqtt.client_cert_path, "***");
+        assert_eq!(config.mqtt.client_key_path, "***");
+    }
+
+    #[tokio::test]
+    async fn test_get_config_handler_wrong_payload_variant() {
+        let ctx = Context::new(test_config());
+        let handler = GetConfigHandler::new(ctx);
+
+        let envelope = CommandEnvelope {
+            uuid: "test-uuid-get-config".to_string(),
+            issued_at: Utc::now(),
+            ttl_sec: 300,
+            payload: CommandPayload::ModemCommands(
+                crate::messages::commands::ModemCommandPayload {
+                    command: "ATI".to_string(),
+                    timeout_ms: None,
+                },
+            ),
+        };
+
+        let err = handler.handle(&envelope).await.unwrap_err();
+        assert!(err.message.contains("expected GetConfig payload"));
     }
 }

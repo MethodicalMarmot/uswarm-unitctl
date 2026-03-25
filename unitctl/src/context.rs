@@ -104,9 +104,8 @@ impl Context {
 mod tests {
     use super::*;
     use crate::config::tests::test_config;
-    use crate::sensors::cpu_temp::CpuTempReading;
+    use crate::messages::telemetry::{CpuTempTelemetry, PingTelemetry};
     use crate::sensors::lte::{LteReading, LteSignalQuality};
-    use crate::sensors::ping::PingReading;
     use mavlink::ardupilotmega::*;
     use mavlink::MavHeader;
 
@@ -241,7 +240,7 @@ mod tests {
     async fn test_sensor_values_ping_write_read() {
         let ctx = Context::new(test_config());
 
-        let reading = PingReading {
+        let reading = PingTelemetry {
             reachable: true,
             latency_ms: 25.5,
             loss_percent: 3,
@@ -283,7 +282,7 @@ mod tests {
     async fn test_sensor_values_cpu_temp_write_read() {
         let ctx = Context::new(test_config());
 
-        let reading = CpuTempReading {
+        let reading = CpuTempTelemetry {
             temperature_c: 42.5,
         };
         *ctx.sensors.cpu_temp.write().await = Some(reading);
@@ -335,7 +334,7 @@ mod tests {
         // Write from one task
         let ctx2 = Arc::clone(&ctx);
         let writer = tokio::spawn(async move {
-            *ctx2.sensors.ping.write().await = Some(PingReading {
+            *ctx2.sensors.ping.write().await = Some(PingTelemetry {
                 reachable: true,
                 latency_ms: 10.0,
                 loss_percent: 0,

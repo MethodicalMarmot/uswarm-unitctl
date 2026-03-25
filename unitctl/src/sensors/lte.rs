@@ -8,33 +8,10 @@ use tracing::{debug, info, warn};
 
 use crate::config::LteSensorConfig;
 use crate::context::Context;
+pub use crate::messages::telemetry::{LteNeighborCell, LteSignalQuality};
 use crate::services::modem_access::{discover_modem, send_at_command, ModemAccess, ModemType};
 
 use super::Sensor;
-
-/// LTE signal quality measurements.
-#[derive(Default, Debug, Clone, serde::Serialize)]
-pub struct LteSignalQuality {
-    pub rsrq: i32,
-    pub rsrp: i32,
-    pub rssi: i32,
-    pub rssnr: i32,
-    pub earfcn: i32,
-    pub tx_power: i32,
-    pub pcid: i32,
-}
-
-/// A neighboring LTE cell.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct LteNeighborCell {
-    pub pcid: i32,
-    pub rsrp: i32,
-    pub rsrq: i32,
-    pub rssi: i32,
-    pub rssnr: i32,
-    pub earfcn: i32,
-    pub last_seen: u64,
-}
 
 /// Current LTE sensor reading.
 #[derive(Default, Debug, Clone, serde::Serialize)]

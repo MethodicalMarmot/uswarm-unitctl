@@ -49,39 +49,27 @@ pub fn detect_modem_type(model: &str) -> Option<ModemType> {
 }
 
 /// Error type for modem operations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ModemError {
     /// D-Bus communication error.
+    #[error("D-Bus error: {0}")]
     Dbus(String),
     /// AT command timed out.
+    #[error("AT command timeout")]
     Timeout,
     /// No modem found on the system.
+    #[error("no modem found")]
     NoModem,
     /// Modem model not recognized.
+    #[error("unsupported modem model: {0}")]
     UnsupportedModem(String),
 }
-
-impl fmt::Display for ModemError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModemError::Dbus(msg) => write!(f, "D-Bus error: {}", msg),
-            ModemError::Timeout => write!(f, "AT command timeout"),
-            ModemError::NoModem => write!(f, "no modem found"),
-            ModemError::UnsupportedModem(model) => {
-                write!(f, "unsupported modem model: {}", model)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ModemError {}
 
 /// Abstraction over modem D-Bus operations.
 ///
 /// This trait allows testing modem-dependent logic without an actual
 /// ModemManager D-Bus service. The real implementation uses the
 /// `modemmanager` crate (behind the `lte` feature flag).
-#[allow(dead_code)] // imsi() and registration_status() not yet called from non-test code
 #[async_trait]
 pub trait ModemAccess: Send + Sync {
     /// Get the modem model string.
@@ -168,7 +156,6 @@ impl NetworkRegistration {
 }
 
 /// Request submitted to the modem worker queue.
-#[allow(dead_code)] // Variants used by trait impl methods not yet called from non-test code
 enum ModemRequest {
     Model {
         reply: oneshot::Sender<Result<String, ModemError>>,

@@ -10,7 +10,7 @@ use tracing::{debug, error, info};
 use super::commands::MavCmdUser1SubCmd;
 use crate::context::Context;
 use crate::sensors::lte::LteReading;
-use crate::sensors::ping::PingReading;
+use crate::messages::telemetry::PingTelemetry;
 use crate::Task;
 
 pub struct TelemetryReporter {
@@ -45,7 +45,7 @@ impl TelemetryReporter {
                     return;
                 }
                 _ = interval.tick() => {
-                    let ping = self.ctx.sensors.ping.read().await.clone().unwrap_or(PingReading::default());
+                    let ping = self.ctx.sensors.ping.read().await.clone().unwrap_or(PingTelemetry::default());
                     let lte = self.ctx.sensors.lte.read().await.clone().unwrap_or(LteReading::default());
 
                     // Send LTE radio telemetry (subcmd 31014) to both targets
@@ -231,7 +231,7 @@ impl TelemetryReporter {
         self_compid: u8,
         target_system: u8,
         target_component: u8,
-        ping: &PingReading,
+        ping: &PingTelemetry,
         lte: &LteReading,
     ) -> MavFrame {
         Self::build_command_long(
@@ -340,8 +340,8 @@ mod tests {
         }
     }
 
-    fn sample_ping_reading(reachable: bool) -> PingReading {
-        PingReading {
+    fn sample_ping_reading(reachable: bool) -> PingTelemetry {
+        PingTelemetry {
             reachable,
             latency_ms: if reachable { 25.5 } else { 0.0 },
             loss_percent: if reachable { 0 } else { 100 },
@@ -484,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_lte_ip_telemetry_partial_loss() {
-        let ping = PingReading {
+        let ping = PingTelemetry {
             reachable: true,
             latency_ms: 50.0,
             loss_percent: 30,

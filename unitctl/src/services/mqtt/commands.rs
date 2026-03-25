@@ -1,126 +1,24 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt;
 use std::sync::Arc;
 
 use super::transport::{MqttEvent, MqttTransport};
 use crate::context::Context;
+use crate::messages::commands::{
+    CommandState, CommandEnvelope, CommandResultData, CommandResultMsg, CommandStatus,
+};
 use crate::services::mqtt::handlers::config_update::ConfigUpdateHandler;
 use crate::services::mqtt::handlers::get_config::GetConfigHandler;
 use crate::services::mqtt::handlers::modem_commands::ModemCommandsHandler;
 use crate::services::mqtt::handlers::update_request::UpdateRequestHandler;
 use crate::Task;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rumqttc::QoS;
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-
-/// State of a command in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandState {
-    Accepted,
-    InProgress,
-    Completed,
-    Failed,
-    Rejected,
-    Expired,
-    Superseded,
-}
-
-/// Incoming command envelope — the JSON payload on `.../cmnd/{name}/in`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct CommandEnvelope {
-    pub uuid: String,
-    pub issued_at: DateTime<Utc>,
-    pub ttl_sec: u64,
-    pub payload: serde_json::Value,
-}
-
-impl CommandEnvelope {
-    /// Check if this command has expired.
-    pub fn is_expired(&self) -> bool {
-        self.is_expired_at(Utc::now())
-    }
-
-    /// Check if this command has expired relative to a given timestamp.
-    pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
-        // Cap TTL to avoid chrono::Duration::seconds() panic on overflow
-        // (chrono stores nanoseconds internally, so i64::MAX seconds overflows).
-        // 10 years is a generous upper bound for any command TTL.
-        const MAX_TTL_SEC: i64 = 315_360_000;
-        let ttl = i64::try_from(self.ttl_sec)
-            .unwrap_or(MAX_TTL_SEC)
-            .min(MAX_TTL_SEC);
-        let expiry = self.issued_at + chrono::Duration::seconds(ttl);
-        now > expiry
-    }
-}
-
-/// Result of a command handler execution.
-///
-/// The `ok` field in the published result message is determined by the `Ok`/`Err`
-/// return type of the handler, not by a field here.
-#[derive(Debug, Clone, Serialize)]
-pub struct CommandResult {
-    #[serde(flatten)]
-    pub extra: serde_json::Value,
-}
-
-/// Error returned by command handlers.
-#[derive(Debug)]
-pub struct CommandError {
-    pub message: String,
-}
-
-impl fmt::Display for CommandError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for CommandError {}
-
-impl CommandError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-/// Trait for handling a specific command type.
-#[async_trait]
-pub trait CommandHandler: Send + Sync {
-    async fn handle(&self, envelope: &CommandEnvelope) -> Result<CommandResult, CommandError>;
-}
-
-/// Status message published to `.../cmnd/{name}/status`.
-#[derive(Debug, Serialize)]
-struct StatusMessage {
-    uuid: String,
-    state: CommandState,
-    ts: String,
-}
-
-/// Reserved keys that cannot be overridden by handler extra data.
-const RESERVED_RESULT_KEYS: &[&str] = &["uuid", "ok", "ts", "error"];
-
-/// Result message published to `.../cmnd/{name}/result`.
-#[derive(Debug, Serialize)]
-struct ResultMessage {
-    uuid: String,
-    ok: bool,
-    ts: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(flatten)]
-    extra: serde_json::Value,
-}
 
 /// Maximum number of recently-processed UUIDs to remember for deduplication.
 /// QoS 1 redeliveries arrive quickly, so a modest window suffices.
@@ -133,6 +31,34 @@ const DEDUP_CAPACITY: usize = 256;
 /// without bound.
 const BRIDGE_CHANNEL_CAPACITY: usize = 64;
 
+/// Error returned by command handlers.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct CommandError {
+    pub message: String,
+}
+
+impl CommandError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+/// Result returned by command handlers.
+#[derive(Debug, Clone)]
+pub struct CommandResult {
+    pub data: CommandResultData,
+}
+
+/// Trait for handling a specific command type.
+#[async_trait]
+pub trait CommandHandler: Send + Sync {
+    async fn handle(&self, envelope: &CommandEnvelope) -> Result<CommandResult, CommandError>;
+}
+
+
 /// Processes incoming MQTT commands, manages lifecycle, and routes to handlers.
 pub struct CommandProcessor {
     transport: Arc<MqttTransport>,
@@ -144,9 +70,7 @@ pub struct CommandProcessor {
     event_rx: Mutex<tokio::sync::broadcast::Receiver<MqttEvent>>,
     /// Track recently-processed command UUIDs to prevent duplicate execution
     /// from QoS 1 redeliveries.
-    seen_uuids: Mutex<HashSet<String>>,
-    /// Insertion order for evicting the oldest UUID when at capacity.
-    seen_order: Mutex<VecDeque<String>>,
+    dedup: Mutex<DedupQueue>,
 }
 
 impl Task for CommandProcessor {
@@ -188,8 +112,7 @@ impl CommandProcessor {
             handlers: HashMap::new(),
             cancel,
             event_rx: Mutex::new(event_rx),
-            seen_uuids: Mutex::new(HashSet::with_capacity(DEDUP_CAPACITY)),
-            seen_order: Mutex::new(VecDeque::with_capacity(DEDUP_CAPACITY)),
+            dedup: Mutex::new(DedupQueue::with_capacity(DEDUP_CAPACITY)),
         }
     }
 
@@ -317,25 +240,12 @@ impl CommandProcessor {
 
     /// Record a UUID as processed. Returns `false` if already seen (duplicate).
     async fn record_uuid(&self, uuid: &str) -> bool {
-        let mut seen_uuids = self.seen_uuids.lock().await;
-        let mut seen_order = self.seen_order.lock().await;
-        if seen_uuids.contains(uuid) {
-            return false;
-        }
-        // Evict oldest if at capacity
-        if seen_uuids.len() >= DEDUP_CAPACITY {
-            if let Some(old) = (*seen_order).pop_front() {
-                (*seen_uuids).remove(&old);
-            }
-        }
-        (*seen_uuids).insert(uuid.to_string());
-        (*seen_order).push_back(uuid.to_string());
-        true
+        self.dedup.lock().await.record(uuid)
     }
 
     /// Process a single command message.
     async fn process_command(&self, cmd_name: &str, payload: &[u8]) {
-        // Parse envelope
+        // Parse envelope using the typed CommandEnvelope from messages module
         let envelope: CommandEnvelope = match serde_json::from_slice(payload) {
             Ok(e) => e,
             Err(e) => {
@@ -385,32 +295,27 @@ impl CommandProcessor {
             Ok(result) => {
                 self.publish_status(cmd_name, uuid, CommandState::Completed)
                     .await;
-                self.publish_result(cmd_name, uuid, true, None, result.extra)
+                self.publish_result(cmd_name, uuid, true, None, Some(result.data))
                     .await;
             }
             Err(e) => {
                 warn!(command = cmd_name, uuid = %uuid, error = %e, "Command failed");
                 self.publish_status(cmd_name, uuid, CommandState::Failed)
                     .await;
-                self.publish_result(
-                    cmd_name,
-                    uuid,
-                    false,
-                    Some(e.message),
-                    serde_json::Value::Object(Default::default()),
-                )
-                .await;
+                self.publish_result(cmd_name, uuid, false, Some(e.message), None)
+                    .await;
             }
         }
     }
 
-    /// Publish a status message to `.../cmnd/{name}/status`.
+    /// Publish a status message to `.../cmnd/{name}/status` using `CommandStatus`
+    /// from the messages module.
     async fn publish_status(&self, cmd_name: &str, uuid: &str, state: CommandState) {
         let topic = self.transport.command_topic(cmd_name, "status");
-        let msg = StatusMessage {
+        let msg = CommandStatus {
             uuid: uuid.to_string(),
             state,
-            ts: Utc::now().to_rfc3339(),
+            ts: Utc::now(),
         };
 
         match serde_json::to_string(&msg) {
@@ -429,39 +334,23 @@ impl CommandProcessor {
         }
     }
 
-    /// Strip reserved keys from extra data to prevent overwriting fixed fields.
-    fn sanitize_extra(extra: serde_json::Value) -> serde_json::Value {
-        if let serde_json::Value::Object(mut map) = extra {
-            for key in RESERVED_RESULT_KEYS {
-                map.remove(*key);
-            }
-            serde_json::Value::Object(map)
-        } else if extra.is_null() {
-            serde_json::Value::Object(serde_json::Map::new())
-        } else {
-            // Wrap non-object values so #[serde(flatten)] can serialize them
-            let mut map = serde_json::Map::new();
-            map.insert("data".to_string(), extra);
-            serde_json::Value::Object(map)
-        }
-    }
-
-    /// Publish a result message to `.../cmnd/{name}/result`.
+    /// Publish a result message to `.../cmnd/{name}/result` using `CommandResultMsg`
+    /// from the messages module.
     async fn publish_result(
         &self,
         cmd_name: &str,
         uuid: &str,
         ok: bool,
         error: Option<String>,
-        extra: serde_json::Value,
+        data: Option<CommandResultData>,
     ) {
         let topic = self.transport.command_topic(cmd_name, "result");
-        let msg = ResultMessage {
+        let msg = CommandResultMsg {
             uuid: uuid.to_string(),
             ok,
-            ts: Utc::now().to_rfc3339(),
+            ts: Utc::now(),
             error,
-            extra: Self::sanitize_extra(extra),
+            data,
         };
 
         match serde_json::to_string(&msg) {
@@ -481,59 +370,92 @@ impl CommandProcessor {
     }
 }
 
+/// Bounded deduplication queue that tracks recently-processed UUIDs.
+struct DedupQueue {
+    seen: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl DedupQueue {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            seen: HashSet::with_capacity(cap),
+            order: VecDeque::with_capacity(cap),
+        }
+    }
+
+    /// Record a UUID. Returns `false` if already seen (duplicate).
+    fn record(&mut self, uuid: &str) -> bool {
+        if self.seen.contains(uuid) {
+            return false;
+        }
+        if self.seen.len() >= DEDUP_CAPACITY {
+            if let Some(old) = self.order.pop_front() {
+                self.seen.remove(&old);
+            }
+        }
+        self.seen.insert(uuid.to_string());
+        self.order.push_back(uuid.to_string());
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::commands::{
+        CommandPayload, GetConfigPayload, ModemCommandPayload, ModemCommandResult,
+    };
     use chrono::TimeZone;
+
+    // Helper: a valid GetConfig payload for deserialization tests
+    fn get_config_payload_json() -> &'static str {
+        r#"{"type": "GetConfig"}"#
+    }
 
     // --- CommandEnvelope deserialization tests ---
 
     #[test]
     fn test_envelope_deserialize_valid() {
-        let json = r#"{
+        let json = format!(
+            r#"{{
             "uuid": "550e8400-e29b-41d4-a716-446655440000",
             "issued_at": "2026-03-23T10:00:00Z",
             "ttl_sec": 300,
-            "payload": {"key": "value"}
-        }"#;
-        let envelope: CommandEnvelope = serde_json::from_str(json).unwrap();
+            "payload": {}
+        }}"#,
+            get_config_payload_json()
+        );
+        let envelope: CommandEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(envelope.uuid, "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(envelope.ttl_sec, 300);
-        assert_eq!(envelope.payload["key"], "value");
-    }
-
-    #[test]
-    fn test_envelope_deserialize_empty_payload() {
-        let json = r#"{
-            "uuid": "test-uuid",
-            "issued_at": "2026-03-23T10:00:00Z",
-            "ttl_sec": 60,
-            "payload": {}
-        }"#;
-        let envelope: CommandEnvelope = serde_json::from_str(json).unwrap();
-        assert_eq!(envelope.uuid, "test-uuid");
-        assert!(envelope.payload.is_object());
     }
 
     #[test]
     fn test_envelope_deserialize_missing_uuid() {
-        let json = r#"{
+        let json = format!(
+            r#"{{
             "issued_at": "2026-03-23T10:00:00Z",
             "ttl_sec": 60,
             "payload": {}
-        }"#;
-        let result: Result<CommandEnvelope, _> = serde_json::from_str(json);
+        }}"#,
+            get_config_payload_json()
+        );
+        let result: Result<CommandEnvelope, _> = serde_json::from_str(&json);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_envelope_deserialize_missing_ttl() {
-        let json = r#"{
+        let json = format!(
+            r#"{{
             "uuid": "test-uuid",
             "issued_at": "2026-03-23T10:00:00Z",
             "payload": {}
-        }"#;
-        let result: Result<CommandEnvelope, _> = serde_json::from_str(json);
+        }}"#,
+            get_config_payload_json()
+        );
+        let result: Result<CommandEnvelope, _> = serde_json::from_str(&json);
         assert!(result.is_err());
     }
 
@@ -550,39 +472,32 @@ mod tests {
 
     // --- TTL expiry tests ---
 
+    fn test_envelope(ttl_sec: u64, issued_at: chrono::DateTime<Utc>) -> CommandEnvelope {
+        CommandEnvelope {
+            uuid: "test".to_string(),
+            issued_at,
+            ttl_sec,
+            payload: CommandPayload::GetConfig(GetConfigPayload {}),
+        }
+    }
+
     #[test]
     fn test_ttl_not_expired() {
-        let now = Utc::now();
-        let envelope = CommandEnvelope {
-            uuid: "test".to_string(),
-            issued_at: now,
-            ttl_sec: 300,
-            payload: serde_json::Value::Null,
-        };
+        let envelope = test_envelope(300, Utc::now());
         assert!(!envelope.is_expired());
     }
 
     #[test]
     fn test_ttl_expired() {
         let issued = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
-        let envelope = CommandEnvelope {
-            uuid: "test".to_string(),
-            issued_at: issued,
-            ttl_sec: 60,
-            payload: serde_json::Value::Null,
-        };
+        let envelope = test_envelope(60, issued);
         assert!(envelope.is_expired());
     }
 
     #[test]
     fn test_ttl_expired_at_specific_time() {
         let issued = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap();
-        let envelope = CommandEnvelope {
-            uuid: "test".to_string(),
-            issued_at: issued,
-            ttl_sec: 60,
-            payload: serde_json::Value::Null,
-        };
+        let envelope = test_envelope(60, issued);
 
         // 30 seconds later — not expired
         let t1 = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 30).unwrap();
@@ -596,13 +511,7 @@ mod tests {
     #[test]
     fn test_ttl_zero_expires_immediately() {
         let issued = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap();
-        let envelope = CommandEnvelope {
-            uuid: "test".to_string(),
-            issued_at: issued,
-            ttl_sec: 0,
-            payload: serde_json::Value::Null,
-        };
-        // Any time after issued_at should be expired
+        let envelope = test_envelope(0, issued);
         let later = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 1).unwrap();
         assert!(envelope.is_expired_at(later));
     }
@@ -635,26 +544,10 @@ mod tests {
             serde_json::to_string(&CommandState::Expired).unwrap(),
             "\"expired\""
         );
-    }
-
-    // --- CommandResult serialization tests ---
-
-    #[test]
-    fn test_command_result_serialization() {
-        let result = CommandResult {
-            extra: serde_json::json!({"data": "test"}),
-        };
-        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
-        assert_eq!(json["data"], "test");
-    }
-
-    #[test]
-    fn test_command_result_empty_extra() {
-        let result = CommandResult {
-            extra: serde_json::json!({}),
-        };
-        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
-        assert!(json.is_object());
+        assert_eq!(
+            serde_json::to_string(&CommandState::Superseded).unwrap(),
+            "\"superseded\""
+        );
     }
 
     // --- extract_command_name tests ---
@@ -707,19 +600,57 @@ mod tests {
         assert_eq!(CommandProcessor::extract_command_name(topic, prefix), None);
     }
 
-    // --- StatusMessage serialization tests ---
+    // --- CommandStatus serialization tests (using messages module type) ---
 
     #[test]
     fn test_status_message_serialization() {
-        let msg = StatusMessage {
+        let ts = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap();
+        let msg = CommandStatus {
             uuid: "test-uuid".to_string(),
             state: CommandState::Accepted,
-            ts: "2026-03-23T10:00:00Z".to_string(),
+            ts,
         };
         let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["uuid"], "test-uuid");
         assert_eq!(json["state"], "accepted");
-        assert_eq!(json["ts"], "2026-03-23T10:00:00Z");
+        assert!(json["ts"].as_str().unwrap().starts_with("2026-03-23"));
+    }
+
+    // --- CommandResultMsg serialization tests (using messages module type) ---
+
+    #[test]
+    fn test_result_message_serialization_with_error() {
+        let ts = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap();
+        let msg = CommandResultMsg {
+            uuid: "test-uuid".to_string(),
+            ok: false,
+            ts,
+            error: Some("something failed".to_string()),
+            data: None,
+        };
+        let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"], "something failed");
+        assert!(json.get("data").is_none());
+    }
+
+    #[test]
+    fn test_result_message_serialization_without_error() {
+        let ts = Utc.with_ymd_and_hms(2026, 3, 23, 10, 0, 0).unwrap();
+        let msg = CommandResultMsg {
+            uuid: "test-uuid".to_string(),
+            ok: true,
+            ts,
+            error: None,
+            data: Some(CommandResultData::ModemCommands(ModemCommandResult {
+                command: "ATI".to_string(),
+                response: "OK".to_string(),
+            })),
+        };
+        let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["ok"], true);
+        assert!(json.get("error").is_none());
+        assert!(json.get("data").is_some());
     }
 
     // --- Command lifecycle integration test (with mock handler) ---
@@ -728,9 +659,12 @@ mod tests {
 
     #[async_trait]
     impl CommandHandler for EchoHandler {
-        async fn handle(&self, envelope: &CommandEnvelope) -> Result<CommandResult, CommandError> {
+        async fn handle(&self, _envelope: &CommandEnvelope) -> Result<CommandResult, CommandError> {
             Ok(CommandResult {
-                extra: envelope.payload.clone(),
+                data: CommandResultData::ModemCommands(ModemCommandResult {
+                    command: "echo".to_string(),
+                    response: "ok".to_string(),
+                }),
             })
         }
     }
@@ -744,178 +678,85 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_process_command_lifecycle_success() {
-        // Set up transport for test
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
+    fn make_test_envelope_json(uuid: &str) -> Vec<u8> {
+        let envelope = serde_json::json!({
+            "uuid": uuid,
+            "issued_at": Utc::now().to_rfc3339(),
+            "ttl_sec": 300,
+            "payload": {"type": "GetConfig"}
+        });
+        serde_json::to_vec(&envelope).unwrap()
+    }
 
+    fn make_test_transport() -> (Arc<MqttTransport>, rumqttc::EventLoop) {
+        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
+        let (client, eventloop) = rumqttc::AsyncClient::new(opts, 10);
+        let (event_tx, _) = tokio::sync::broadcast::channel(16);
         let transport = Arc::new(MqttTransport::new_for_test(
             client,
             "drone-42".to_string(),
             "prod".to_string(),
             event_tx,
         ));
+        (transport, eventloop)
+    }
 
+    #[tokio::test]
+    async fn test_process_command_lifecycle_success() {
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let mut processor = CommandProcessor::new(transport, cancel);
         processor.register("echo", EchoHandler);
 
-        // Build a valid command envelope
-        let envelope = serde_json::json!({
-            "uuid": "test-uuid-123",
-            "issued_at": Utc::now().to_rfc3339(),
-            "ttl_sec": 300,
-            "payload": {"message": "hello"}
-        });
-        let payload = serde_json::to_vec(&envelope).unwrap();
-
-        // process_command won't panic — publishes will fail silently (no broker)
-        // but the lifecycle logic runs correctly
+        let payload = make_test_envelope_json("test-uuid-123");
         processor.process_command("echo", &payload).await;
     }
 
     #[tokio::test]
     async fn test_process_command_expired() {
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
-
-        let transport = Arc::new(MqttTransport::new_for_test(
-            client,
-            "drone-42".to_string(),
-            "prod".to_string(),
-            event_tx,
-        ));
-
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let processor = CommandProcessor::new(transport, cancel);
 
-        // Build an expired command
         let envelope = serde_json::json!({
             "uuid": "expired-uuid",
             "issued_at": "2020-01-01T00:00:00Z",
             "ttl_sec": 60,
-            "payload": {}
+            "payload": {"type": "GetConfig"}
         });
         let payload = serde_json::to_vec(&envelope).unwrap();
-
-        // Should detect expired and publish expired status (publish fails silently, no broker)
         processor.process_command("anything", &payload).await;
     }
 
     #[tokio::test]
     async fn test_process_command_rejected_no_handler() {
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
-
-        let transport = Arc::new(MqttTransport::new_for_test(
-            client,
-            "drone-42".to_string(),
-            "prod".to_string(),
-            event_tx,
-        ));
-
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let processor = CommandProcessor::new(transport, cancel);
-        // No handlers registered
 
-        let envelope = serde_json::json!({
-            "uuid": "reject-uuid",
-            "issued_at": Utc::now().to_rfc3339(),
-            "ttl_sec": 300,
-            "payload": {}
-        });
-        let payload = serde_json::to_vec(&envelope).unwrap();
-
-        // Should publish accepted then rejected (no handler found)
+        let payload = make_test_envelope_json("reject-uuid");
         processor.process_command("unknown_cmd", &payload).await;
     }
 
     #[tokio::test]
     async fn test_process_command_handler_failure() {
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
-
-        let transport = Arc::new(MqttTransport::new_for_test(
-            client,
-            "drone-42".to_string(),
-            "prod".to_string(),
-            event_tx,
-        ));
-
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let mut processor = CommandProcessor::new(transport, cancel);
         processor.register("fail_cmd", FailHandler);
 
-        let envelope = serde_json::json!({
-            "uuid": "fail-uuid",
-            "issued_at": Utc::now().to_rfc3339(),
-            "ttl_sec": 300,
-            "payload": {}
-        });
-        let payload = serde_json::to_vec(&envelope).unwrap();
-
-        // Should go: accepted -> in_progress -> failed
+        let payload = make_test_envelope_json("fail-uuid");
         processor.process_command("fail_cmd", &payload).await;
     }
 
     #[tokio::test]
     async fn test_process_command_invalid_json() {
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
-
-        let transport = Arc::new(MqttTransport::new_for_test(
-            client,
-            "drone-42".to_string(),
-            "prod".to_string(),
-            event_tx,
-        ));
-
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let processor = CommandProcessor::new(transport, cancel);
 
         // Invalid JSON payload — should log warning and return without panicking
         processor.process_command("test", b"not json").await;
-    }
-
-    // --- sanitize_extra tests ---
-
-    #[test]
-    fn test_sanitize_extra_strips_reserved_keys() {
-        let extra = serde_json::json!({
-            "uuid": "evil",
-            "ok": false,
-            "ts": "spoofed",
-            "error": "injected",
-            "data": "real"
-        });
-        let sanitized = CommandProcessor::sanitize_extra(extra);
-        let obj = sanitized.as_object().unwrap();
-        assert!(!obj.contains_key("uuid"));
-        assert!(!obj.contains_key("ok"));
-        assert!(!obj.contains_key("ts"));
-        assert!(!obj.contains_key("error"));
-        assert_eq!(obj["data"], "real");
-    }
-
-    #[test]
-    fn test_sanitize_extra_null_returns_empty_object() {
-        let sanitized = CommandProcessor::sanitize_extra(serde_json::Value::Null);
-        assert!(sanitized.is_object());
-        assert!(sanitized.as_object().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_sanitize_extra_non_object_wrapped() {
-        let sanitized =
-            CommandProcessor::sanitize_extra(serde_json::Value::String("hello".to_string()));
-        let obj = sanitized.as_object().unwrap();
-        assert_eq!(obj["data"], "hello");
     }
 
     #[test]
@@ -924,48 +765,11 @@ mod tests {
         assert_eq!(err.to_string(), "test error");
     }
 
-    #[test]
-    fn test_result_message_serialization_with_error() {
-        let msg = ResultMessage {
-            uuid: "test-uuid".to_string(),
-            ok: false,
-            ts: "2026-03-23T10:00:00Z".to_string(),
-            error: Some("something failed".to_string()),
-            extra: serde_json::json!({}),
-        };
-        let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
-        assert_eq!(json["ok"], false);
-        assert_eq!(json["error"], "something failed");
-    }
-
-    #[test]
-    fn test_result_message_serialization_without_error() {
-        let msg = ResultMessage {
-            uuid: "test-uuid".to_string(),
-            ok: true,
-            ts: "2026-03-23T10:00:00Z".to_string(),
-            error: None,
-            extra: serde_json::json!({"data": 42}),
-        };
-        let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
-        assert_eq!(json["ok"], true);
-        assert!(json.get("error").is_none());
-        assert_eq!(json["data"], 42);
-    }
-
     // --- UUID deduplication tests ---
 
     #[tokio::test]
     async fn test_record_uuid_deduplicates() {
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
-        let transport = Arc::new(MqttTransport::new_for_test(
-            client,
-            "drone-42".to_string(),
-            "prod".to_string(),
-            event_tx,
-        ));
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let processor = CommandProcessor::new(transport, cancel);
 
@@ -978,15 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_uuid_evicts_oldest_at_capacity() {
-        let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
-        let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 10);
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
-        let transport = Arc::new(MqttTransport::new_for_test(
-            client,
-            "drone-42".to_string(),
-            "prod".to_string(),
-            event_tx,
-        ));
+        let (transport, _eventloop) = make_test_transport();
         let cancel = CancellationToken::new();
         let processor = CommandProcessor::new(transport, cancel);
 
@@ -1001,5 +797,58 @@ mod tests {
         assert!(processor.record_uuid("new-uuid").await);
         // uuid-0 was evicted, so it should be accepted again
         assert!(processor.record_uuid("uuid-0").await);
+    }
+
+    // --- Messages module integration tests ---
+
+    #[test]
+    fn test_command_envelope_uses_typed_payload() {
+        let env = CommandEnvelope {
+            uuid: "test".to_string(),
+            issued_at: Utc::now(),
+            ttl_sec: 300,
+            payload: CommandPayload::ModemCommands(ModemCommandPayload {
+                command: "AT+CSQ".to_string(),
+                timeout_ms: None,
+            }),
+        };
+        assert!(!env.is_expired());
+
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(json.contains("AT+CSQ"));
+    }
+
+    #[test]
+    fn test_publish_uses_messages_command_status() {
+        let ts = Utc.with_ymd_and_hms(2026, 3, 25, 12, 0, 0).unwrap();
+        let status = CommandStatus {
+            uuid: "status-test".to_string(),
+            state: CommandState::Completed,
+            ts,
+        };
+        let json: serde_json::Value = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["uuid"], "status-test");
+        assert_eq!(json["state"], "completed");
+        assert!(json["ts"].as_str().unwrap().contains("2026"));
+    }
+
+    #[test]
+    fn test_publish_uses_messages_command_result_msg() {
+        let ts = Utc.with_ymd_and_hms(2026, 3, 25, 12, 0, 0).unwrap();
+        let result = CommandResultMsg {
+            uuid: "result-test".to_string(),
+            ok: true,
+            ts,
+            error: None,
+            data: Some(CommandResultData::ModemCommands(ModemCommandResult {
+                command: "ATI".to_string(),
+                response: "OK".to_string(),
+            })),
+        };
+        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["uuid"], "result-test");
+        assert_eq!(json["ok"], true);
+        assert!(json.get("error").is_none());
+        assert!(json.get("data").is_some());
     }
 }

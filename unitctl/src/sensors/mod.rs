@@ -11,9 +11,8 @@ use tracing::info;
 
 use crate::config::SensorsConfig;
 use crate::context::Context;
-use crate::sensors::cpu_temp::CpuTempReading;
+use crate::messages::telemetry::{CpuTempTelemetry, PingTelemetry};
 use crate::sensors::lte::LteReading;
-use crate::sensors::ping::PingReading;
 use crate::Task;
 
 use self::cpu_temp::CpuTempSensor;
@@ -22,9 +21,9 @@ use self::ping::PingSensor;
 
 /// Shared sensor values, updated by sensor tasks and read by telemetry reporters.
 pub struct SensorValues {
-    pub ping: RwLock<Option<PingReading>>,
+    pub ping: RwLock<Option<PingTelemetry>>,
     pub lte: RwLock<Option<LteReading>>,
-    pub cpu_temp: RwLock<Option<CpuTempReading>>,
+    pub cpu_temp: RwLock<Option<CpuTempTelemetry>>,
 }
 
 /// A sensor that runs as its own tokio task, gathering telemetry data
@@ -44,7 +43,7 @@ pub trait Sensor: Send + Sync {
 pub struct SensorManager {
     pub(crate) ctx: Arc<Context>,
     pub(crate) cancel: CancellationToken,
-    pub(crate) sensors: Mutex<Vec<Box<dyn Sensor>>>,
+    pub(crate) sensors: Mutex<Option<Vec<Box<dyn Sensor>>>>,
 }
 
 impl SensorManager {
@@ -79,7 +78,7 @@ impl SensorManager {
         SensorManager {
             ctx,
             cancel,
-            sensors: Mutex::new(sensors),
+            sensors: Mutex::new(Some(sensors)),
         }
     }
 }
@@ -88,10 +87,12 @@ impl Task for SensorManager {
     /// Spawn all sensors as tokio tasks. Each sensor runs until the
     /// cancellation token is triggered.
     fn run(self: Arc<Self>) -> Vec<tokio::task::JoinHandle<()>> {
-        let sensors: Vec<Box<dyn Sensor>> = {
-            let mut guard = self.sensors.lock().unwrap();
-            std::mem::take(&mut *guard)
-        };
+        let sensors: Vec<Box<dyn Sensor>> = self
+            .sensors
+            .lock()
+            .expect("sensor mutex poisoned")
+            .take()
+            .expect("sensors already taken — run() must only be called once");
 
         let sensor_count = sensors.len();
 
@@ -126,7 +127,7 @@ mod tests {
         Arc::new(SensorManager {
             ctx,
             cancel: CancellationToken::new(),
-            sensors: Mutex::new(sensors),
+            sensors: Mutex::new(Some(sensors)),
         })
     }
 
@@ -150,7 +151,7 @@ mod tests {
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
         let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
-        assert_eq!(manager.sensors.lock().unwrap().len(), 0);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 0);
     }
 
     #[test]
@@ -160,7 +161,7 @@ mod tests {
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
         let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
-        assert_eq!(manager.sensors.lock().unwrap().len(), 3);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 3);
     }
 
     #[tokio::test]
@@ -194,9 +195,9 @@ mod tests {
         let manager = Arc::new(SensorManager {
             ctx,
             cancel: cancel.clone(),
-            sensors: Mutex::new(vec![Box::new(sensor)]),
+            sensors: Mutex::new(Some(vec![Box::new(sensor)])),
         });
-        assert_eq!(manager.sensors.lock().unwrap().len(), 1);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
 
         manager.run();
 
@@ -229,8 +230,8 @@ mod tests {
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
         let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
-        assert_eq!(manager.sensors.lock().unwrap().len(), 1);
-        assert_eq!(manager.sensors.lock().unwrap()[0].name(), "ping");
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(), "ping");
     }
 
     #[test]
@@ -253,8 +254,8 @@ mod tests {
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
         let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
-        assert_eq!(manager.sensors.lock().unwrap().len(), 1);
-        assert_eq!(manager.sensors.lock().unwrap()[0].name(), "lte");
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(), "lte");
     }
 
     #[test]
@@ -277,8 +278,8 @@ mod tests {
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
         let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
-        assert_eq!(manager.sensors.lock().unwrap().len(), 1);
-        assert_eq!(manager.sensors.lock().unwrap()[0].name(), "cpu_temp");
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(), "cpu_temp");
     }
 
     #[test]
@@ -301,8 +302,9 @@ mod tests {
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
         let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
-        assert_eq!(manager.sensors.lock().unwrap().len(), 2);
-        let sensors = manager.sensors.lock().unwrap();
+        assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 2);
+        let guard = manager.sensors.lock().unwrap();
+        let sensors = guard.as_ref().unwrap();
         assert_eq!(sensors[0].name(), "ping");
         assert_eq!(sensors[1].name(), "cpu_temp");
     }

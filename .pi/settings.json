@@ -1,0 +1,14 @@
+{
+  "packages": [
+    "npm:pi-subagents",
+    "npm:pi-prompt-template-model",
+    "npm:pi-rewind",
+    "npm:pi-powerline-footer",
+    "npm:@plannotator/pi-extension",
+    "npm:@marckrenn/pi-sub-status",
+    "npm:pi-ask-user",
+    "npm:pi-rtk-optimizer",
+    "npm:pi-teams",
+    "npm:pi-context"
+  ]
+}

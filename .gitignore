@@ -8,11 +8,12 @@ __pycache__
 *.swp
 *.svg
 venv
+context.md
+architecture.md
+config.toml
 
 # Rust build artifacts
 target/
-.cargo/
-
-# ralphex progress logs
 .ralphex
 .claude
+.rtk

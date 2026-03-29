@@ -1,0 +1,9 @@
+# ACL for MQTT integration tests.
+# With use_identity_as_username the CN of the client certificate
+# becomes the username used for matching.
+
+user test-drone-01
+topic readwrite prod/nodes/test-drone-01/#
+
+user admin
+topic readwrite #

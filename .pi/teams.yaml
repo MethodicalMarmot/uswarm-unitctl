@@ -1,0 +1,7 @@
+# Planning team — interactive feature planning with architecture review
+planning:
+  - planner
+  - scout
+  - rust-architect
+  - frontend-architect
+  - plan-reviewer

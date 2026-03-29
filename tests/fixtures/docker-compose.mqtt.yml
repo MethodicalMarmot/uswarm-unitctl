@@ -1,0 +1,23 @@
+# Docker Compose configuration for Mosquitto MQTT broker integration tests.
+# Mirrors the testcontainers setup in tests/mqtt_integration.rs::start_mosquitto().
+#
+# Usage:
+#   cd tests/fixtures
+#   docker compose -f docker-compose.mqtt.yml up -d
+#
+# Ports:
+#   8883 - TLS listener (mTLS with client certificate)
+#   1883 - Plain TCP listener (no auth)
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "8883:8883"
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./acl:/mosquitto/config/acl:ro
+      - ./certs/ca.pem:/mosquitto/certs/ca.pem:ro
+      - ./certs/server.pem:/mosquitto/certs/server.pem:ro
+      - ./certs/server.key:/mosquitto/certs/server.key:ro

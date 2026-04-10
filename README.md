@@ -57,7 +57,7 @@ make schema
 - regex (ping output parsing)
 - modemmanager (ModemManager D-Bus client for LTE modem communication)
 - zbus (D-Bus transport)
-- nix (POSIX signals for ping subprocess control)
+- nix (POSIX signals, process control, network interface enumeration)
 - rumqttc (MQTT client with mutual TLS via rustls)
 - serde_json (JSON serialization for MQTT payloads)
 - uuid (command UUID generation)
@@ -199,6 +199,7 @@ cp config.toml.example config.toml
 ```toml
 [general]
 debug = false                # Enable debug logging via config (also enabled by --debug CLI flag)
+interface = "eth0"           # Network interface name for ping sensor binding and MQTT status IP
 
 [mavlink]
 protocol = "tcpout"          # Connection protocol (only "tcpout" supported)
@@ -226,7 +227,6 @@ default_interval_s = 1.0     # Default polling interval for all sensors
 enabled = true               # Enable ping sensor
 # interval_s = 1.0           # Override default interval (optional)
 host = "10.45.0.2"           # Target host to ping
-interface = ""               # Bind to specific interface ("" = any)
 
 [sensors.lte]
 enabled = true               # Enable LTE telemetry sensor
@@ -297,6 +297,7 @@ mavlink-routerd (TCP:5760)
     +-- MqttTransport (when mqtt.enabled = true) -- mutual TLS connection to broker
             |
             +-- TelemetryPublisher -- publishes sensor JSON to MQTT broker
+            +-- StatusPublisher -- publishes online status with IP on connect/reconnect
             +-- CommandProcessor -- receives and executes commands from central server
                     |
                     +-- GetConfigHandler, ConfigUpdateHandler,
@@ -321,8 +322,9 @@ mavlink-routerd (TCP:5760)
 
 When `mqtt.enabled = true`, unitctl connects to a central MQTT broker using mutual TLS for bidirectional communication.
 
-- **MqttTransport** (`services/mqtt/transport.rs`) - Manages broker connection with mutual TLS. Handles reconnection, publish/subscribe, and broadcasts incoming messages on an event channel. Node ID is extracted from the client certificate CN.
+- **MqttTransport** (`services/mqtt/transport.rs`) - Manages broker connection with mutual TLS. Handles reconnection, publish/subscribe, and broadcasts incoming messages on an event channel. Node ID is extracted from the client certificate CN. Configures an MQTT Last Will and Testament (LWT) with an offline status payload for automatic offline detection.
 - **TelemetryPublisher** (`services/mqtt/telemetry.rs`) - Periodically reads sensor values from Context and publishes them as JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Sensors with no reading are skipped.
+- **StatusPublisher** (`services/mqtt/status.rs`) - Publishes a retained online status message (with session ID, version, and resolved IPv4 from `general.interface`) to `{env_prefix}/nodes/{nodeId}/status` on each connect/reconnect. Works with the LWT for automatic offline detection.
 - **CommandProcessor** (`services/mqtt/commands.rs`) - Subscribes to command topics, dispatches to registered handlers, and manages the command lifecycle (accepted -> in_progress -> completed/failed). Supports TTL-based expiry.
 - **Command Handlers** (`services/mqtt/handlers/`) - `get_config` returns current config, `config_update` applies changes (placeholder), `update_request` acknowledges updates (placeholder), `modem_commands` routes AT commands through ModemAccess.
 
@@ -332,7 +334,7 @@ The sensor subsystem (`sensors/`) provides a trait-based framework for gathering
 
 - **Sensor trait** - Common interface: `name()` and `async fn run()` with Context and CancellationToken.
 - **SensorManager** - Reads config, builds list of enabled sensors, spawns each as a tokio task.
-- **PingSensor** (`sensors/ping.rs`) - Spawns a `ping` subprocess, sends periodic SIGQUIT to get stats, parses latency and packet loss. Stores `PingReading { reachable, latency_ms, loss_percent }`.
+- **PingSensor** (`sensors/ping.rs`) - Spawns a `ping` subprocess bound to `general.interface` via `-I`, sends periodic SIGQUIT to get stats, parses latency and packet loss. Stores `PingReading { reachable, latency_ms, loss_percent }`.
 - **LteSensor** (`sensors/lte.rs`) - Reads LTE signal quality via modem access service from Context. Waits for modem availability at startup, detects modem type (SIMCOM 7600, Quectel EM12/EM06E/EM06GL), then sends modem-specific AT commands to read signal quality. Stores `LteReading { signal, neighbors }`.
 - **CpuTempSensor** (`sensors/cpu_temp.rs`) - Reads `/sys/class/thermal/thermal_zone0/temp`, converts millidegrees to degrees. Stores `CpuTempReading { temperature_c }`.
 
@@ -348,15 +350,16 @@ The env module (`env/`) generates environment files for external services at sta
 ### Startup Sequence
 
 1. Parse CLI arguments and load TOML config
-2. Create shared Context with channels and sensor value storage
-3. Spawn modem discovery as background task (ModemAccessService::start(), stores in Context when ready)
-4. Spawn env file writers (MavlinkEnvWriter, CameraEnvWriter) — write config-derived env files and exit
-5. Spawn SensorManager (starts enabled sensor tasks; LteSensor waits for modem in Context)
-6. Spawn drone component and sniffer tasks (with heartbeat loops)
-7. Spawn TelemetryReporter (1Hz sensor value broadcasts)
-8. If `mqtt.enabled`: create MqttTransport, spawn event loop, TelemetryPublisher, and CommandProcessor with registered handlers
-9. Wait for flight controller discovery (heartbeat with system ID < 200)
-10. Run until SIGINT/SIGTERM triggers graceful shutdown
+2. Validate `general.interface` has a resolvable IPv4 address (exit 1 on failure)
+3. Create shared Context with channels and sensor value storage
+4. Spawn modem discovery as background task (ModemAccessService::start(), stores in Context when ready)
+5. Spawn env file writers (MavlinkEnvWriter, CameraEnvWriter) — write config-derived env files and exit
+6. Spawn SensorManager (starts enabled sensor tasks; LteSensor waits for modem in Context)
+7. Spawn drone component and sniffer tasks (with heartbeat loops)
+8. Spawn TelemetryReporter (1Hz sensor value broadcasts)
+9. If `mqtt.enabled`: create MqttTransport, spawn event loop, TelemetryPublisher, StatusPublisher, and CommandProcessor with registered handlers
+10. Wait for flight controller discovery (heartbeat with system ID < 200)
+11. Run until SIGINT/SIGTERM triggers graceful shutdown
 
 ## Testing
 

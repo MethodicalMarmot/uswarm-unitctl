@@ -44,6 +44,7 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct GeneralConfig {
     pub debug: bool,
+    pub interface: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -97,7 +98,6 @@ pub struct PingSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
     pub host: String,
-    pub interface: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -142,7 +142,6 @@ impl Default for PingSensorConfig {
             enabled: true,
             interval_s: None,
             host: "10.45.0.2".to_string(),
-            interface: String::new(),
         }
     }
 }
@@ -359,6 +358,29 @@ impl Config {
             }
         }
 
+        // Validate general.interface
+        if self.general.interface.is_empty() {
+            return Err(ConfigError::Validation(
+                "general.interface must not be empty".to_string(),
+            ));
+        }
+        if self.general.interface.starts_with('-') {
+            return Err(ConfigError::Validation(
+                "general.interface must not start with '-'".to_string(),
+            ));
+        }
+        if !self
+            .general
+            .interface
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+        {
+            return Err(ConfigError::Validation(
+                "general.interface must contain only alphanumeric, '.', '_', or '-' characters"
+                    .to_string(),
+            ));
+        }
+
         // Validate sensor intervals (must be finite and positive; TOML allows inf/nan)
         if !self.sensors.default_interval_s.is_finite() || self.sensors.default_interval_s <= 0.0 {
             return Err(ConfigError::Validation(
@@ -398,25 +420,6 @@ impl Config {
                 "sensors.ping.host must be a valid hostname or IP address".to_string(),
             ));
         }
-        if !self.sensors.ping.interface.is_empty() {
-            if self.sensors.ping.interface.starts_with('-') {
-                return Err(ConfigError::Validation(
-                    "sensors.ping.interface must not start with '-'".to_string(),
-                ));
-            }
-            if !self
-                .sensors
-                .ping
-                .interface
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-            {
-                return Err(ConfigError::Validation(
-                    "sensors.ping.interface must contain only alphanumeric, '.', '_', or '-' characters".to_string(),
-                ));
-            }
-        }
-
         // Validate MQTT config (only when enabled)
         if self.mqtt.enabled {
             if self.mqtt.host.is_empty() {
@@ -467,6 +470,7 @@ pub mod tests {
     pub const FULL_TEST_CONFIG: &str = r#"
 [general]
 debug = false
+interface = "eth0"
 
 [mavlink]
 protocol = "tcpout"
@@ -505,7 +509,6 @@ default_interval_s = 1.0
 [sensors.ping]
 enabled = true
 host = "10.45.0.2"
-interface = ""
 
 [sensors.lte]
 enabled = true
@@ -534,6 +537,7 @@ telemetry_interval_s = 1.0
         let toml_str = r#"
 [general]
 debug = true
+interface = "eth0"
 
 [mavlink]
 protocol = "tcpout"
@@ -572,7 +576,6 @@ default_interval_s = 1.0
 [sensors.ping]
 enabled = true
 host = "10.45.0.2"
-interface = ""
 
 [sensors.lte]
 enabled = true
@@ -624,6 +627,7 @@ telemetry_interval_s = 1.0
     fn test_parse_config_from_constant() {
         let config = test_config();
         assert!(!config.general.debug);
+        assert_eq!(config.general.interface, "eth0");
         assert_eq!(config.mavlink.protocol, "tcpout");
         assert_eq!(config.mavlink.host, "127.0.0.1");
         assert_eq!(config.mavlink.local_mavlink_port, 5760);
@@ -653,7 +657,6 @@ telemetry_interval_s = 1.0
         assert!(config.sensors.ping.enabled);
         assert_eq!(config.sensors.ping.interval_s, None);
         assert_eq!(config.sensors.ping.host, "10.45.0.2");
-        assert_eq!(config.sensors.ping.interface, "");
         assert!(config.sensors.lte.enabled);
         assert_eq!(config.sensors.lte.interval_s, None);
         assert_eq!(config.sensors.lte.neighbor_expiry_s, 30.0);
@@ -730,7 +733,6 @@ default_interval_s = 1.0
 [sensors.ping]
 enabled = true
 host = "10.45.0.2"
-interface = ""
 
 [sensors.lte]
 enabled = true
@@ -866,7 +868,6 @@ enabled = true
         assert!(config.sensors.ping.enabled);
         assert_eq!(config.sensors.ping.interval_s, None);
         assert_eq!(config.sensors.ping.host, "10.45.0.2");
-        assert_eq!(config.sensors.ping.interface, "");
         assert!(config.sensors.lte.enabled);
         assert_eq!(config.sensors.lte.interval_s, None);
         assert_eq!(config.sensors.lte.neighbor_expiry_s, 30.0);
@@ -879,6 +880,7 @@ enabled = true
         let toml_str = r#"
 [general]
 debug = false
+interface = "eth0"
 
 [mavlink]
 protocol = "tcpout"
@@ -918,7 +920,6 @@ default_interval_s = 2.0
 enabled = true
 interval_s = 0.5
 host = "192.168.1.1"
-interface = "eth0"
 
 [sensors.lte]
 enabled = false
@@ -946,7 +947,6 @@ telemetry_interval_s = 1.0
         assert!(config.sensors.ping.enabled);
         assert_eq!(config.sensors.ping.interval_s, Some(0.5));
         assert_eq!(config.sensors.ping.host, "192.168.1.1");
-        assert_eq!(config.sensors.ping.interface, "eth0");
 
         assert!(!config.sensors.lte.enabled);
         assert_eq!(config.sensors.lte.interval_s, Some(3.0));
@@ -1068,10 +1068,34 @@ telemetry_interval_s = 1.0
     }
 
     #[test]
-    fn test_dash_prefix_ping_interface_rejected() {
+    fn test_dash_prefix_general_interface_rejected() {
         let mut config = test_config();
-        config.sensors.ping.interface = "-evil".to_string();
-        assert!(config.validate().is_err());
+        config.general.interface = "-evil".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("general.interface"));
+    }
+
+    #[test]
+    fn test_empty_general_interface_rejected() {
+        let mut config = test_config();
+        config.general.interface = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("general.interface"));
+    }
+
+    #[test]
+    fn test_invalid_chars_general_interface_rejected() {
+        let mut config = test_config();
+        config.general.interface = "eth 0".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("general.interface"));
+    }
+
+    #[test]
+    fn test_general_interface_roundtrips() {
+        let config = test_config();
+        assert_eq!(config.general.interface, "eth0");
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -1409,6 +1433,7 @@ telemetry_interval_s = 1.0
         let toml_str = r#"
 [general]
 debug = false
+interface = "eth0"
 
 [mavlink]
 protocol = "tcpout"
@@ -1447,7 +1472,6 @@ default_interval_s = 1.0
 [sensors.ping]
 enabled = true
 host = "10.45.0.2"
-interface = ""
 
 [sensors.lte]
 enabled = true

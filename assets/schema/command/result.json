@@ -229,11 +229,15 @@
     "GeneralConfig": {
       "type": "object",
       "required": [
-        "debug"
+        "debug",
+        "interface"
       ],
       "properties": {
         "debug": {
           "type": "boolean"
+        },
+        "interface": {
+          "type": "string"
         }
       }
     },
@@ -345,17 +349,13 @@
       "type": "object",
       "required": [
         "enabled",
-        "host",
-        "interface"
+        "host"
       ],
       "properties": {
         "enabled": {
           "type": "boolean"
         },
         "host": {
-          "type": "string"
-        },
-        "interface": {
           "type": "string"
         },
         "interval_s": {

@@ -26,11 +26,11 @@ pub struct PingSensor {
 }
 
 impl PingSensor {
-    pub fn new(config: &PingSensorConfig, default_interval: f64) -> Self {
+    pub fn new(config: &PingSensorConfig, interface: String, default_interval: f64) -> Self {
         let interval_s = config.interval_s.unwrap_or(default_interval);
         Self {
             host: config.host.clone(),
-            interface: config.interface.clone(),
+            interface,
             interval: Duration::from_secs_f64(interval_s),
         }
     }
@@ -86,9 +86,7 @@ async fn run_ping_subprocess(
 ) -> PingExit {
     let mut cmd = Command::new("ping");
 
-    if !interface.is_empty() {
-        cmd.arg("-I").arg(interface);
-    }
+    cmd.arg("-I").arg(interface);
     cmd.arg("-q").arg("-i0.2").arg(host);
     cmd.kill_on_drop(true);
 
@@ -449,11 +447,10 @@ mod tests {
             enabled: true,
             interval_s: None,
             host: "10.45.0.2".to_string(),
-            interface: String::new(),
         };
-        let sensor = PingSensor::new(&config, 1.0);
+        let sensor = PingSensor::new(&config, "eth0".to_string(), 1.0);
         assert_eq!(sensor.host, "10.45.0.2");
-        assert_eq!(sensor.interface, "");
+        assert_eq!(sensor.interface, "eth0");
         assert_eq!(sensor.interval, Duration::from_secs_f64(1.0));
     }
 
@@ -463,18 +460,24 @@ mod tests {
             enabled: true,
             interval_s: Some(0.5),
             host: "192.168.1.1".to_string(),
-            interface: "eth0".to_string(),
         };
-        let sensor = PingSensor::new(&config, 1.0);
+        let sensor = PingSensor::new(&config, "wlan0".to_string(), 1.0);
         assert_eq!(sensor.host, "192.168.1.1");
-        assert_eq!(sensor.interface, "eth0");
+        assert_eq!(sensor.interface, "wlan0");
         assert_eq!(sensor.interval, Duration::from_secs_f64(0.5));
     }
 
     #[test]
     fn test_sensor_name() {
         let config = PingSensorConfig::default();
-        let sensor = PingSensor::new(&config, 1.0);
+        let sensor = PingSensor::new(&config, "lo".to_string(), 1.0);
         assert_eq!(sensor.name(), "ping");
+    }
+
+    #[test]
+    fn test_ping_sensor_stores_general_interface() {
+        let config = PingSensorConfig::default();
+        let sensor = PingSensor::new(&config, "wwan0".to_string(), 1.0);
+        assert_eq!(sensor.interface, "wwan0");
     }
 }

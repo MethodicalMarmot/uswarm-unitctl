@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::messages::status::{NodeStatusEnvelope, OnlineStatusData, StatusData};
+use crate::net;
 use crate::Task;
 
 use super::transport::{MqttEvent, MqttTransport};
@@ -18,28 +19,44 @@ use super::transport::{MqttEvent, MqttTransport};
 pub struct StatusPublisher {
     transport: Arc<MqttTransport>,
     cancel: CancellationToken,
+    /// Network interface name used to resolve IPv4 for the online status message.
+    interface: String,
     /// Pre-created event receiver to avoid missing the first ConnAck.
     /// Taken once by `run()` via `Option::take()`.
     event_rx: Mutex<Option<tokio::sync::broadcast::Receiver<MqttEvent>>>,
 }
 
 impl StatusPublisher {
-    pub fn new(transport: Arc<MqttTransport>, cancel: CancellationToken) -> Self {
+    pub fn new(
+        transport: Arc<MqttTransport>,
+        cancel: CancellationToken,
+        interface: String,
+    ) -> Self {
         let event_rx = transport.subscribe_events();
         Self {
             transport,
             cancel,
+            interface,
             event_rx: Mutex::new(Some(event_rx)),
         }
     }
 
     /// Build and publish an online status message (retained, QoS 1).
     async fn publish_online(&self) {
+        let ip = match net::resolve_ipv4(&self.interface) {
+            Ok(addr) => Some(addr.to_string()),
+            Err(e) => {
+                warn!(interface = %self.interface, error = %e, "failed to resolve interface IP for online status");
+                None
+            }
+        };
+
         let envelope = NodeStatusEnvelope {
             ts: Utc::now(),
             data: StatusData::Online(OnlineStatusData {
                 session: self.transport.session_id().to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                ip,
             }),
         };
 
@@ -111,6 +128,7 @@ mod tests {
             data: StatusData::Online(OnlineStatusData {
                 session: "abc123".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                ip: Some("192.0.2.1".to_string()),
             }),
         };
         let json = serde_json::to_string(&envelope).unwrap();
@@ -142,7 +160,7 @@ mod tests {
         assert_eq!(transport.status_topic(), "prod/nodes/drone-42/status");
 
         let cancel = CancellationToken::new();
-        let publisher = StatusPublisher::new(transport.clone(), cancel);
+        let publisher = StatusPublisher::new(transport.clone(), cancel, "lo".to_string());
         // The publisher uses transport.status_topic() internally,
         // so the topic it publishes to is the same.
         assert_eq!(
@@ -165,7 +183,59 @@ mod tests {
         ));
 
         let cancel = CancellationToken::new();
-        let publisher = Arc::new(StatusPublisher::new(transport, cancel));
+        let publisher = Arc::new(StatusPublisher::new(transport, cancel, "lo".to_string()));
         let _task: Arc<dyn Task> = publisher;
+    }
+
+    /// Verify that publish_online resolves IP when the interface exists (loopback).
+    #[test]
+    fn test_publish_online_resolves_ip_for_valid_interface() {
+        // Build the envelope the same way publish_online does, using "lo"
+        let ip = match net::resolve_ipv4("lo") {
+            Ok(addr) => Some(addr.to_string()),
+            Err(_) => None,
+        };
+        let envelope = NodeStatusEnvelope {
+            ts: Utc::now(),
+            data: StatusData::Online(OnlineStatusData {
+                session: "test01".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                ip,
+            }),
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let data = parsed.get("data").unwrap();
+        assert_eq!(data.get("ip").unwrap(), "127.0.0.1");
+    }
+
+    /// Verify that an unknown interface yields ip: None in the payload.
+    #[test]
+    fn test_publish_online_unknown_interface_yields_ip_none() {
+        let ip = match net::resolve_ipv4("nonexistent9999") {
+            Ok(addr) => Some(addr.to_string()),
+            Err(_) => None,
+        };
+        assert!(ip.is_none());
+        let envelope = NodeStatusEnvelope {
+            ts: Utc::now(),
+            data: StatusData::Online(OnlineStatusData {
+                session: "test02".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                ip,
+            }),
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        // ip field should be omitted when None
+        assert!(
+            !json.contains("\"ip\""),
+            "ip field should be omitted for unknown interface"
+        );
+        // Round-trip works
+        let parsed: NodeStatusEnvelope = serde_json::from_str(&json).unwrap();
+        match parsed.data {
+            StatusData::Online(data) => assert_eq!(data.ip, None),
+            _ => panic!("expected Online"),
+        }
     }
 }

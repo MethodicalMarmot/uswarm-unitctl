@@ -190,10 +190,7 @@ impl MosquittoContainer {
         TlsConfiguration::Simple {
             ca: self._certs.ca_pem.clone(),
             alpn: None,
-            client_auth: Some((
-                self._certs.admin_pem.clone(),
-                self._certs.admin_key.clone(),
-            )),
+            client_auth: Some((self._certs.admin_pem.clone(), self._certs.admin_key.clone())),
         }
     }
 
@@ -212,7 +209,6 @@ impl MosquittoContainer {
         opts.set_clean_session(true);
         AsyncClient::new(opts, 10)
     }
-
 }
 
 async fn start_mosquitto() -> MosquittoContainer {
@@ -558,7 +554,7 @@ async fn test_command_lifecycle_status_transitions() {
         "data": {
             "type": "GetConfig",
             "config": {
-                "general": {"debug": false},
+                "general": {"debug": false, "interface": "eth0"},
                 "mavlink": {
                     "protocol": "tcpout", "host": "127.0.0.1",
                     "local_mavlink_port": 5760, "remote_mavlink_port": 5760,
@@ -571,7 +567,7 @@ async fn test_command_lifecycle_status_transitions() {
                 },
                 "sensors": {
                     "default_interval_s": 1.0,
-                    "ping": {"enabled": true, "host": "10.45.0.2", "interface": ""},
+                    "ping": {"enabled": true, "host": "10.45.0.2"},
                     "lte": {"enabled": true, "neighbor_expiry_s": 30.0},
                     "cpu_temp": {"enabled": true}
                 },

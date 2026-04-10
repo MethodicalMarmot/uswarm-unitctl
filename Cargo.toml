@@ -14,7 +14,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 async-trait = "0.1"
 regex = "1"
-nix = { version = "0.31.2", features = ["signal", "process"] }
+nix = { version = "0.31.2", features = ["signal", "process", "net"] }
 modemmanager = { git = "https://github.com/omnect/modemmanager.git", rev = "dfab97416092c71651a8a5138c9caa85576aebdb" }
 zbus = { version = "5" }
 rumqttc = { version = "0.24", features = ["use-rustls"] }

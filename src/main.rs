@@ -48,6 +48,27 @@ async fn main() {
 
     info!("unitctl starting");
 
+    // Fail fast if the configured interface has no IPv4 address.
+    // This catches misconfiguration before any tasks are spawned.
+    // Runtime failures during MQTT reconnect are handled gracefully in StatusPublisher.
+    match unitctl::net::resolve_ipv4(&config.general.interface) {
+        Ok(ip) => {
+            info!(
+                interface = %config.general.interface,
+                ip = %ip,
+                "interface IP resolved"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                interface = %config.general.interface,
+                error = %e,
+                "failed to resolve interface IP at startup"
+            );
+            std::process::exit(1);
+        }
+    }
+
     info!(
         host = %config.mavlink.host,
         local_mavlink_port = config.mavlink.local_mavlink_port,
@@ -100,6 +121,7 @@ async fn main() {
         Arc::clone(&ctx),
         cancel.clone(),
         &ctx.config.sensors,
+        &ctx.config.general.interface,
     ));
     handles.extend(sensor_manager.run());
 
@@ -137,8 +159,11 @@ async fn main() {
 
                 // Create status publisher BEFORE transport.run() so its
                 // broadcast receiver is ready for the first ConnAck.
-                let status_publisher =
-                    Arc::new(StatusPublisher::new(Arc::clone(&transport), cancel.clone()));
+                let status_publisher = Arc::new(StatusPublisher::new(
+                    Arc::clone(&transport),
+                    cancel.clone(),
+                    ctx.config.general.interface.clone(),
+                ));
                 handles.extend(status_publisher.run());
 
                 // Run transport after all subscribers have been registered
@@ -284,6 +309,7 @@ mod tests {
             Arc::clone(&ctx),
             cancel.clone(),
             &ctx.config.sensors,
+            &ctx.config.general.interface,
         ));
         // Default config has all 3 sensors enabled
         assert_eq!(

@@ -3,6 +3,7 @@ pub mod context;
 pub mod env;
 pub mod mavlink;
 pub mod messages;
+pub mod net;
 pub mod sensors;
 pub mod services;
 

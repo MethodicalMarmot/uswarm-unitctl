@@ -27,6 +27,9 @@ pub struct OnlineStatusData {
     pub session: String,
     /// Application version from Cargo.toml.
     pub version: String,
+    /// IPv4 address of the configured network interface, if resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
 }
 
 /// Status data set as MQTT Last Will — published by the broker when the
@@ -55,6 +58,7 @@ mod tests {
             data: StatusData::Online(OnlineStatusData {
                 session: "a8f2c1".to_string(),
                 version: "0.1.0".to_string(),
+                ip: Some("192.0.2.1".to_string()),
             }),
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -64,6 +68,7 @@ mod tests {
             StatusData::Online(data) => {
                 assert_eq!(data.session, "a8f2c1");
                 assert_eq!(data.version, "0.1.0");
+                assert_eq!(data.ip, Some("192.0.2.1".to_string()));
             }
             _ => panic!("expected Online"),
         }
@@ -98,6 +103,7 @@ mod tests {
             data: StatusData::Online(OnlineStatusData {
                 session: "b3d4e5".to_string(),
                 version: "1.2.3".to_string(),
+                ip: Some("10.0.0.5".to_string()),
             }),
         };
         let value: serde_json::Value = serde_json::to_value(&msg).unwrap();
@@ -111,6 +117,7 @@ mod tests {
         // Data has online-specific fields
         assert_eq!(data.get("session").unwrap(), "b3d4e5");
         assert_eq!(data.get("version").unwrap(), "1.2.3");
+        assert_eq!(data.get("ip").unwrap(), "10.0.0.5");
         // Data does NOT have offline-specific fields
         assert!(data.get("last_session").is_none());
         assert!(data.get("last_online").is_none());
@@ -152,5 +159,38 @@ mod tests {
         // check for the discriminator values instead of struct names.
         assert!(json.contains("\"Online\""));
         assert!(json.contains("\"Offline\""));
+    }
+
+    #[test]
+    fn online_status_ip_none_omits_field() {
+        let msg = NodeStatusEnvelope {
+            ts: sample_ts(),
+            data: StatusData::Online(OnlineStatusData {
+                session: "d4e5f6".to_string(),
+                version: "0.2.0".to_string(),
+                ip: None,
+            }),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        // The "ip" key should not appear in serialized JSON
+        assert!(
+            !json.contains("\"ip\""),
+            "ip field should be omitted when None"
+        );
+        // Round-trip still works
+        let parsed: NodeStatusEnvelope = serde_json::from_str(&json).unwrap();
+        match parsed.data {
+            StatusData::Online(data) => {
+                assert_eq!(data.ip, None);
+            }
+            _ => panic!("expected Online"),
+        }
+    }
+
+    #[test]
+    fn json_schema_contains_ip_field() {
+        let schema = schemars::schema_for!(NodeStatusEnvelope);
+        let json = serde_json::to_string_pretty(&schema).unwrap();
+        assert!(json.contains("\"ip\""), "schema should contain ip field");
     }
 }

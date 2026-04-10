@@ -29,6 +29,13 @@
             "version"
           ],
           "properties": {
+            "ip": {
+              "description": "IPv4 address of the configured network interface, if resolved.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "session": {
               "description": "Short random session ID generated per connection (6-char hex).",
               "type": "string"

@@ -402,7 +402,7 @@ mod tests {
         let in_topic = transport.command_topic("config_update", "in");
         // The wildcard pattern would be: prod/nodes/drone-42/cmnd/+/in
         let prefix = "prod/nodes/drone-42/cmnd/";
-        assert!(in_topic.starts_with(&prefix));
+        assert!(in_topic.starts_with(prefix));
         assert!(in_topic.ends_with("/in"));
     }
 

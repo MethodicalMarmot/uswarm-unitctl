@@ -48,13 +48,19 @@ pub struct SensorManager {
 
 impl SensorManager {
     /// Build a SensorManager from config. Only enabled sensors are included.
-    pub fn new(ctx: Arc<Context>, cancel: CancellationToken, config: &SensorsConfig) -> Self {
+    pub fn new(
+        ctx: Arc<Context>,
+        cancel: CancellationToken,
+        config: &SensorsConfig,
+        interface: &str,
+    ) -> Self {
         let mut sensors: Vec<Box<dyn Sensor>> = Vec::new();
 
         if config.ping.enabled {
             info!("sensor enabled: ping");
             sensors.push(Box::new(PingSensor::new(
                 &config.ping,
+                interface.to_string(),
                 config.default_interval_s,
             )));
         }
@@ -150,7 +156,7 @@ mod tests {
         };
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
-        let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
+        let manager = SensorManager::new(ctx, CancellationToken::new(), &config, "eth0");
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 0);
     }
 
@@ -160,7 +166,7 @@ mod tests {
         let config = SensorsConfig::default();
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
-        let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
+        let manager = SensorManager::new(ctx, CancellationToken::new(), &config, "eth0");
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 3);
     }
 
@@ -229,7 +235,7 @@ mod tests {
         };
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
-        let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
+        let manager = SensorManager::new(ctx, CancellationToken::new(), &config, "eth0");
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
         assert_eq!(
             manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(),
@@ -256,7 +262,7 @@ mod tests {
         };
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
-        let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
+        let manager = SensorManager::new(ctx, CancellationToken::new(), &config, "eth0");
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
         assert_eq!(
             manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(),
@@ -283,7 +289,7 @@ mod tests {
         };
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
-        let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
+        let manager = SensorManager::new(ctx, CancellationToken::new(), &config, "eth0");
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
         assert_eq!(
             manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(),
@@ -310,7 +316,7 @@ mod tests {
         };
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
-        let manager = SensorManager::new(ctx, CancellationToken::new(), &config);
+        let manager = SensorManager::new(ctx, CancellationToken::new(), &config, "eth0");
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 2);
         let guard = manager.sensors.lock().unwrap();
         let sensors = guard.as_ref().unwrap();

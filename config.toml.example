@@ -4,6 +4,7 @@
 
 [general]
 debug = false
+interface = "eth0"
 
 [mavlink]
 protocol = "tcpout"
@@ -48,7 +49,6 @@ default_interval_s = 1.0
 enabled = true
 # interval_s = 1.0
 host = "10.45.0.2"
-interface = ""
 
 [sensors.lte]
 enabled = true

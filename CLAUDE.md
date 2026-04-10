@@ -33,21 +33,22 @@ make schema
 - `config.toml` (from `config.toml.example`) — TOML config with sections: general, mavlink, mavlink.fc, camera, sensors, mqtt
 - All fields are required — there are no serde defaults. The config file must explicitly specify every value.
 - Config is loaded via `config::load_config()` and parsed with serde
+- `[general]` section includes `debug` (bool) and `interface` (String, required — the network interface name used for ping sensor binding and IP resolution in MQTT online status)
 - Debug logging is enabled by either `--debug` CLI flag or `general.debug = true` in config
 - `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields
 - `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type`, `device`
-- `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`)
+- `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`). Ping sensor uses `general.interface` for binding.
 - `[mqtt]` section configures MQTT communication with a central server: `enabled` (bool), `host`, `port` (8883 for TLS), `ca_cert_path`, `client_cert_path`, `client_key_path` (mutual TLS), `env_prefix` (topic namespace), `telemetry_interval_s`
 
 ## Architecture
 
 ### Crate Structure
 
-`lib.rs` defines a `Task` trait (`run() -> Vec<JoinHandle>`) and re-exports all modules. `main.rs` is the application entry point that wires components together. The `generate-schema` binary (`src/bin/generate_schema.rs`) generates JSON Schema files from message types into `assets/schema/`.
+`lib.rs` defines a `Task` trait (`run() -> Vec<JoinHandle>`) and re-exports all modules. `main.rs` is the application entry point that wires components together. The `generate-schema` binary (`src/bin/generate_schema.rs`) generates JSON Schema files from message types into `assets/schema/`. **Net utilities** (`net.rs`) provides `resolve_ipv4(interface) -> Result<Ipv4Addr, ResolveIpError>` which resolves the first IPv4 address on a named network interface using `nix::ifaddrs::getifaddrs()`. Used at startup for fail-fast validation and by `StatusPublisher` on each MQTT connect/reconnect.
 
 ### Async Task System
 
-The `Task` trait is implemented by all major components. `main.rs` creates a shared `Context`, spawns tasks (env writers, drone component, sniffer, sensor manager, telemetry reporter, status publisher), waits for flight controller discovery, then runs until SIGINT/SIGTERM.
+The `Task` trait is implemented by all major components. `main.rs` creates a shared `Context`, spawns tasks (env writers, drone component, sniffer, sensor manager, telemetry reporter, status publisher), waits for flight controller discovery, then runs until SIGINT/SIGTERM. Before spawning tasks, `main.rs` validates that `general.interface` has a resolvable IPv4 address; on failure it logs an error and exits with code 1.
 
 ### Context (`context.rs`)
 
@@ -67,7 +68,7 @@ Bidirectional MQTT communication with a central server. Split into transport (co
 - **TelemetryPublisher** (`services/mqtt/telemetry.rs`) — Implements `Task` trait. Periodically reads sensor values from `Context.sensors`, wraps them in `TelemetryEnvelope` (non-generic, with `TelemetryData` enum) from the messages module, and publishes JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Skips sensors with no reading.
 - **CommandProcessor** (`services/mqtt/commands.rs`) — Subscribes to `{prefix}/nodes/{nodeId}/cmnd/+/in`, deserializes incoming commands into typed `CommandEnvelope` (non-generic, with `CommandPayload` enum) from the messages module, routes to registered `CommandHandler` implementations. Manages command lifecycle: TTL check → accepted → in_progress → completed/failed. Publishes status and result using `CommandResultMsg` (non-generic, with `CommandResultData` enum) to corresponding topics.
 - **TLS helpers** (`services/mqtt/tls.rs`) — `load_tls_config()` loads CA and client certificates for mutual TLS. `extract_node_id()` parses the client certificate and extracts the CN from the X.509 subject.
-- **StatusPublisher** (`services/mqtt/status.rs`) — Implements `Task` trait. Subscribes to `MqttEvent::Connected` broadcast and publishes a retained online `NodeStatusEnvelope` (with session ID and version) to `{env_prefix}/nodes/{nodeId}/status` on each connect/reconnect. Works with the LWT set in `MqttTransport` for automatic offline detection.
+- **StatusPublisher** (`services/mqtt/status.rs`) — Implements `Task` trait. Subscribes to `MqttEvent::Connected` broadcast and publishes a retained online `NodeStatusEnvelope` (with session ID, version, and resolved IPv4 from `general.interface`) to `{env_prefix}/nodes/{nodeId}/status` on each connect/reconnect. Resolves IP per-connect so published address reflects current state; on resolver failure logs a warning and publishes with `ip: None`. Works with the LWT set in `MqttTransport` for automatic offline detection.
 - **Command handlers** (`services/mqtt/handlers/`) — `GetConfigHandler` returns `GetConfigResult` with `SafeConfig`. `ConfigUpdateHandler` uses `ConfigUpdatePayload`/`ConfigUpdateResult` (placeholder). `UpdateRequestHandler` uses `UpdateRequestPayload`/`UpdateRequestResult` (placeholder). `ModemCommandsHandler` uses `ModemCommandPayload`/`ModemCommandResult` to route AT commands through `ModemAccess`.
 - **Messages module** (`messages/`) — Typed message structs for all MQTT messages. Contains `telemetry.rs` (telemetry data types and `TelemetryEnvelope` with `TelemetryData` enum), `commands.rs` (command payload/result types, `CommandEnvelope` with `CommandPayload` enum, `CommandResultMsg` with `CommandResultData` enum, `CommandStatus`, `SafeConfig`), `status.rs` (node status types: `NodeStatusEnvelope` with `StatusData` enum for Online/Offline presence), and `schema.rs` (JSON Schema generation via `schemars`). Schemas are generated into `assets/schema/` by the `generate-schema` binary. On subsequent builds, `build.rs` automatically runs the binary if it was previously built; for fresh clones, run `cargo run --bin generate-schema` or `make schema`.
 
@@ -76,7 +77,7 @@ Bidirectional MQTT communication with a central server. Split into transport (co
 Trait-based sensor framework. Each sensor implements `Sensor` trait (`name()` + `async fn run()`), runs as its own tokio task at a configurable interval, and stores results in Context's `SensorValues`.
 
 - **SensorManager** (`sensors/mod.rs`) — builds list of enabled sensors from config, spawns each as tokio task with CancellationToken. Also defines `SensorValues` struct.
-- **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess, sends SIGQUIT for stats, parses latency/loss. Uses `PingTelemetry` from messages module (aliased as `PingReading`).
+- **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess with `-I <interface>` (from `general.interface`), sends SIGQUIT for stats, parses latency/loss. Uses `PingTelemetry` from messages module (aliased as `PingReading`).
 - **LteSensor** (`sensors/lte.rs`) — reads modem from Context (via `ModemAccessService`), AT command signal quality parsing, neighbor cell tracking. Uses `LteNeighborCell` from messages module. Defines `LteReading` (sensor-internal, HashMap-based) and `LteSignalQuality`.
 - **CpuTempSensor** (`sensors/cpu_temp.rs`) — reads sysfs thermal zone, converts millidegrees to degrees. Uses `CpuTempTelemetry` from messages module (aliased as `CpuTempReading`).
 
@@ -151,10 +152,11 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `ModemCommandPayload`/`ModemCommandResult` — modem_commands command types (defined in `messages/commands.rs`)
 - `NodeStatusEnvelope` — non-generic envelope: `ts` timestamp + `data: StatusData` enum (defined in `messages/status.rs`)
 - `StatusData` — `#[serde(tag = "type")]` enum: Online, Offline variants for node presence (defined in `messages/status.rs`)
-- `OnlineStatusData` — session ID and version, published on connect (defined in `messages/status.rs`)
+- `OnlineStatusData` — session ID, version, and optional `ip` (IPv4 of `general.interface`, resolved per-connect), published on connect (defined in `messages/status.rs`)
 - `OfflineStatusData` — last_session and last_online timestamp, used in LWT (defined in `messages/status.rs`)
-- `StatusPublisher` — publishes retained online status on each MQTT connect, works with LWT for offline detection (defined in `services/mqtt/status.rs`)
+- `StatusPublisher` — publishes retained online status (including resolved IPv4 from `general.interface`) on each MQTT connect/reconnect, works with LWT for offline detection (defined in `services/mqtt/status.rs`)
+- `ResolveIpError` — enum: InterfaceNotFound, NoIpv4, Getifaddrs; returned by `resolve_ipv4()` (defined in `net.rs`)
 
 ## Dependencies
 
-tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix, rumqttc (use-rustls), serde_json, chrono (serde), x509-parser, schemars (chrono feature, also in build-dependencies), rand
+tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix (signal, process, net), rumqttc (use-rustls), serde_json, chrono (serde), x509-parser, schemars (chrono feature, also in build-dependencies), rand, thiserror

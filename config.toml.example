@@ -11,7 +11,7 @@ protocol = "tcpout"
 host = "127.0.0.1"
 local_mavlink_port = 5760
 remote_mavlink_port = 14550
-self_sysid = 1
+self_sysid = 1               # MAVLink system ID for this unit; set to 0 to autodiscover (min FC sysid from sniffer)
 self_compid = 10
 gcs_sysid = 255
 gcs_compid = 190
@@ -54,6 +54,8 @@ host = "10.45.0.2"
 enabled = true
 # interval_s = 1.0
 neighbor_expiry_s = 30.0
+# Modem backend: "dbus" (real ModemManager) or "fake" (deterministic simulator)
+modem_type = "dbus"
 
 [sensors.cpu_temp]
 enabled = true

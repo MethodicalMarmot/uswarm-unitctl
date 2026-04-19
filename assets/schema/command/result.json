@@ -245,6 +245,7 @@
       "type": "object",
       "required": [
         "enabled",
+        "modem_type",
         "neighbor_expiry_s"
       ],
       "properties": {
@@ -257,6 +258,9 @@
             "null"
           ],
           "format": "double"
+        },
+        "modem_type": {
+          "type": "string"
         },
         "neighbor_expiry_s": {
           "type": "number",

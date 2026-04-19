@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart unitctl on config changes
+StartLimitIntervalSec=0
+
+[Path]
+PathModified=/etc/unitctl/config.toml
+
+[Install]
+WantedBy=multi-user.target

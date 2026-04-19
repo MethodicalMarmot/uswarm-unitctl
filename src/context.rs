@@ -68,6 +68,20 @@ impl Context {
         self.tx_broadcast.subscribe()
     }
 
+    /// Resolve the effective MAVLink self system ID.
+    ///
+    /// Returns the configured `mavlink.self_sysid` when it is non-zero.
+    /// When the config value is `0`, autodiscovers the sysid as the minimum
+    /// entry of `available_systems` (typically the FC), or `None` if no
+    /// systems have been discovered yet.
+    pub async fn self_sysid(&self) -> Option<u8> {
+        let configured = self.config.mavlink.self_sysid;
+        if configured > 0 {
+            return Some(configured);
+        }
+        self.get_fc_sysids().await.into_iter().min()
+    }
+
     /// Retrieves a set of Flight Controller (FC) system IDs.
     pub async fn get_fc_sysids(&self) -> HashSet<u8> {
         let systems = self.available_systems.read().await;

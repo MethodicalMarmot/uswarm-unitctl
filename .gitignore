@@ -11,6 +11,7 @@ venv
 context.md
 architecture.md
 config.toml
+.worktrees
 
 # Rust build artifacts
 target/

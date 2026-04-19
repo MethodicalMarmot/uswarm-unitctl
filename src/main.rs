@@ -98,7 +98,7 @@ async fn main() {
     let modem_ctx = Arc::clone(&ctx);
     let modem_cancel = cancel.clone();
     let modem_handle = tokio::spawn(async move {
-        match ModemAccessService::start(&modem_cancel).await {
+        match ModemAccessService::start(&modem_ctx.config.sensors.lte, &modem_cancel).await {
             Ok(service) => {
                 info!("modem access service started, storing in context");
                 modem_ctx.set_modem(service).await;
@@ -497,8 +497,14 @@ mod tests {
         cancel.cancel();
 
         let modem_ctx = Arc::clone(&ctx);
+        let lte = unitctl::config::LteSensorConfig {
+            enabled: true,
+            interval_s: None,
+            neighbor_expiry_s: 30.0,
+            modem_type: "dbus".to_string(),
+        };
         let handle = tokio::spawn(async move {
-            match unitctl::services::modem_access::ModemAccessService::start(&cancel).await {
+            match unitctl::services::modem_access::ModemAccessService::start(&lte, &cancel).await {
                 Ok(service) => {
                     modem_ctx.set_modem(service).await;
                 }

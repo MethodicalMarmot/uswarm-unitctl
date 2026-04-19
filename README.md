@@ -206,7 +206,7 @@ protocol = "tcpout"          # Connection protocol (only "tcpout" supported)
 host = "127.0.0.1"           # mavlink-routerd host
 local_mavlink_port = 5760    # Local port for Rust code to connect to mavlink-routerd
 remote_mavlink_port = 14550  # Remote mavlink port written to env file
-self_sysid = 1               # MAVLink system ID for this unit
+self_sysid = 1               # MAVLink system ID for this unit (set to 0 to autodiscover: see below)
 self_compid = 10             # MAVLink component ID for this unit
 gcs_sysid = 255              # Ground control station system ID
 gcs_compid = 190             # Ground control station component ID
@@ -261,6 +261,17 @@ telemetry_interval_s = 1.0   # Sensor telemetry publish interval in seconds
 ```
 
 All sections and fields must be present in the config file. The only optional field is `interval_s` on each sensor, which overrides `default_interval_s` when set.
+
+#### `self_sysid` autodiscovery
+
+Setting `mavlink.self_sysid = 0` enables runtime autodiscovery: the effective sender system ID is taken as the minimum FC system ID in `Context.available_systems` (populated by the sniffer from observed heartbeats with sysid < 200). With `self_sysid = 0`:
+
+- Validation skips uniqueness checks involving `self_sysid` (other uniqueness checks still apply).
+- The drone heartbeat task waits for FC discovery, then resolves `self_sysid` via `Context::self_sysid()` before starting heartbeat emission.
+- The telemetry reporter resolves `self_sysid` per tick via `Context::self_sysid()` and skips ticks until a value is available.
+- The sniffer's own heartbeat continues to use `mavlink.sniffer_sysid` and is unaffected.
+
+Any non-zero value of `self_sysid` disables autodiscovery and is used verbatim (the previous behavior).
 
 ## Architecture
 

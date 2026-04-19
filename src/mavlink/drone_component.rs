@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, Instrument};
 
-use super::{backoff_or_cancel, heartbeat_loop, mavlink_connect};
+use super::{backoff_or_cancel, heartbeat_loop, mavlink_connect, wait_for_fc};
 use crate::context::Context;
 use crate::Task;
 
@@ -116,13 +116,24 @@ impl Task for DroneComponent {
         });
         info!("drone component started");
 
-        // Spawn drone heartbeat loop
+        // Spawn drone heartbeat loop. Resolve self_sysid after FC discovery,
+        // supporting autodiscovery (config self_sysid = 0 -> min of available_systems).
         let cancel = self.cancel.clone();
         let ctx = Arc::clone(&self.ctx);
-        let sysid = self.ctx.config.mavlink.self_sysid;
         let compid = self.ctx.config.mavlink.self_compid;
         let drone_hb_handle = tokio::spawn(
             async move {
+                if wait_for_fc(&ctx, &cancel).await.is_none() {
+                    return;
+                }
+                let sysid = match ctx.self_sysid().await {
+                    Some(v) => v,
+                    None => {
+                        error!("drone heartbeat: cannot resolve self_sysid");
+                        return;
+                    }
+                };
+                info!(self_sysid = sysid, "drone heartbeat: resolved self_sysid");
                 heartbeat_loop(&cancel, sysid, compid, ctx).await;
             }
             .instrument(info_span!(TRACING_SPAN_NAME)),

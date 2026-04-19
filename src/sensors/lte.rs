@@ -733,6 +733,7 @@ mod tests {
             enabled: true,
             interval_s: None,
             neighbor_expiry_s: 30.0,
+            modem_type: "dbus".to_string(),
         };
         let sensor = LteSensor::new(&config, 1.0);
         assert_eq!(sensor.interval, Duration::from_secs_f64(1.0));
@@ -745,6 +746,7 @@ mod tests {
             enabled: true,
             interval_s: Some(2.0),
             neighbor_expiry_s: 60.0,
+            modem_type: "dbus".to_string(),
         };
         let sensor = LteSensor::new(&config, 1.0);
         assert_eq!(sensor.interval, Duration::from_secs_f64(2.0));

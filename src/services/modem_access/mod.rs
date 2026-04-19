@@ -189,9 +189,28 @@ const DISCOVERY_RETRY_SECS: u64 = 5;
 const REQUEST_QUEUE_CAPACITY: usize = 32;
 
 impl ModemAccessService {
-    /// Discover modem (with retry), spawn worker, return service handle.
-    pub async fn start(cancel: &CancellationToken) -> Result<Arc<Self>, ModemError> {
-        let modem = Self::discover_with_retry(cancel).await?;
+    /// Start the modem access service.
+    ///
+    /// `modem_type == "dbus"` performs ModemManager D-Bus discovery with retry.
+    /// `modem_type == "fake"` immediately wires the deterministic `FakeModemAccess`.
+    pub async fn start(
+        cfg: &crate::config::LteSensorConfig,
+        cancel: &CancellationToken,
+    ) -> Result<Arc<Self>, ModemError> {
+        let modem: Box<dyn ModemAccess> = match cfg.modem_type.as_str() {
+            "fake" => {
+                info!("modem access service starting in fake mode (simulation)");
+                Box::new(FakeModemAccess::new())
+            }
+            "dbus" => Self::discover_with_retry(cancel).await?,
+            other => {
+                return Err(ModemError::Dbus(format!(
+                    "unknown modem_type {:?} (config validation should have prevented this)",
+                    other
+                )));
+            }
+        };
+
         let (tx, rx) = mpsc::channel(REQUEST_QUEUE_CAPACITY);
 
         let cancel_clone = cancel.clone();
@@ -377,103 +396,10 @@ fn parse_registration_response(response: &str) -> Option<NetworkRegistration> {
     None
 }
 
-// --- Real ModemManager D-Bus implementation ---
+pub mod dbus;
+pub mod fake;
 
-pub mod dbus {
-    use super::*;
-    use modemmanager::dbus::modem::ModemProxy;
-    use zbus::Connection;
-
-    /// Real modem accessor using ModemManager D-Bus service.
-    pub struct DbusModemAccess {
-        connection: Connection,
-        modem_path: String,
-    }
-
-    impl DbusModemAccess {
-        /// Connect to ModemManager and return all available modems.
-        ///
-        /// Returns one `DbusModemAccess` per modem object path found in
-        /// ModemManager. Returns `NoModem` error if no modems are present.
-        pub async fn discover_all() -> Result<Vec<Self>, ModemError> {
-            let connection = Connection::system()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to connect to system bus: {}", e)))?;
-
-            // Use ObjectManager to enumerate modems under /org/freedesktop/ModemManager1
-            let proxy = zbus::fdo::ObjectManagerProxy::builder(&connection)
-                .destination("org.freedesktop.ModemManager1")
-                .map_err(|e| ModemError::Dbus(format!("failed to build proxy: {}", e)))?
-                .path("/org/freedesktop/ModemManager1")
-                .map_err(|e| ModemError::Dbus(format!("invalid path: {}", e)))?
-                .build()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to create proxy: {}", e)))?;
-
-            let objects = proxy
-                .get_managed_objects()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to enumerate modems: {}", e)))?;
-
-            let modem_paths: Vec<String> = objects
-                .keys()
-                .filter(|path| path.as_str().contains("/Modem/"))
-                .map(|p| p.to_string())
-                .collect();
-
-            if modem_paths.is_empty() {
-                return Err(ModemError::NoModem);
-            }
-
-            let modems = modem_paths
-                .into_iter()
-                .map(|modem_path| {
-                    debug!(modem_path = %modem_path, "modem found via D-Bus");
-                    Self {
-                        connection: connection.clone(),
-                        modem_path,
-                    }
-                })
-                .collect();
-
-            Ok(modems)
-        }
-
-        async fn modem_proxy(&self) -> Result<ModemProxy<'_>, ModemError> {
-            zbus::proxy::Builder::<'_, ModemProxy<'_>>::new(&self.connection)
-                .destination("org.freedesktop.ModemManager1")
-                .map_err(|e| ModemError::Dbus(format!("failed to set destination: {}", e)))?
-                .path(self.modem_path.as_str())
-                .map_err(|e| ModemError::Dbus(format!("invalid modem path: {}", e)))?
-                .build()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to create modem proxy: {}", e)))
-        }
-    }
-
-    #[async_trait]
-    impl ModemAccess for DbusModemAccess {
-        async fn model(&self) -> Result<String, ModemError> {
-            let proxy = self.modem_proxy().await?;
-            proxy
-                .model()
-                .await
-                .map_err(|e| ModemError::Dbus(format!("failed to read model: {}", e)))
-        }
-
-        async fn command(&self, cmd: &str, timeout_ms: u32) -> Result<String, ModemError> {
-            let proxy = self.modem_proxy().await?;
-            proxy.command(cmd, timeout_ms).await.map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("Timeout") || msg.contains("timeout") {
-                    ModemError::Timeout
-                } else {
-                    ModemError::Dbus(format!("AT command failed: {}", e))
-                }
-            })
-        }
-    }
-}
+pub use fake::FakeModemAccess;
 
 #[cfg(test)]
 mod tests {
@@ -986,6 +912,34 @@ mod tests {
         let result = service.model().await;
         // Worker has exited, so either the send fails or the reply channel is dropped
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_service_start_with_fake_modem_type() {
+        use crate::config::LteSensorConfig;
+
+        let cfg = LteSensorConfig {
+            enabled: true,
+            interval_s: None,
+            neighbor_expiry_s: 30.0,
+            modem_type: "fake".to_string(),
+        };
+        let cancel = CancellationToken::new();
+
+        // Should complete instantly — no D-Bus discovery, no retries.
+        let svc = tokio::time::timeout(
+            tokio::time::Duration::from_millis(500),
+            ModemAccessService::start(&cfg, &cancel),
+        )
+        .await
+        .expect("start() must complete quickly with modem_type=fake")
+        .expect("start() must succeed with modem_type=fake");
+
+        // Verify a round-trip command works through the worker.
+        let resp = svc.command("AT+QENG=\"servingcell\"", 1000).await.unwrap();
+        assert!(resp.contains("+QENG: \"servingcell\""));
+
+        cancel.cancel();
     }
 
     #[tokio::test]

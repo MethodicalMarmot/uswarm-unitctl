@@ -138,7 +138,6 @@ impl MavlinkSniffer {
     /// whose system IDs are >= FC_SYSID_THRESHOLD. Does NOT filter self_sysid
     /// because the drone component waits for FC discovery before sending heartbeats,
     /// and the real FC may use the same system ID as self_sysid (common: both are 1).
-    /// This matches the Python sniffer which unconditionally adds all heartbeat sysids.
     async fn handle_heartbeat(&self, header: &MavHeader) {
         let sysid = header.system_id;
         let compid = header.component_id;

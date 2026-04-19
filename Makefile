@@ -20,10 +20,10 @@ build:
 	cargo build
 
 release:
-	cargo build --release
+	cargo build --release --bin unitctl
 
 release-pi:
-	cross build --release --target $(PI_TARGET)
+	cross build --release --bin unitctl --target $(PI_TARGET)
 
 test:
 	cargo test --lib --bin "*"
@@ -40,3 +40,4 @@ lint:
 
 schema:
 	cargo run --bin generate-schema
+

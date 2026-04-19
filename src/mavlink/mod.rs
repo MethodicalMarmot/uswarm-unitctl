@@ -76,7 +76,10 @@ pub fn is_fc_sysid(id: u8) -> bool {
 }
 
 /// Wait for a flight controller to be discovered (system ID < 200).
-async fn wait_for_fc(ctx: &Arc<Context>, cancel: &CancellationToken) -> Option<HashSet<u8>> {
+pub(crate) async fn wait_for_fc(
+    ctx: &Arc<Context>,
+    cancel: &CancellationToken,
+) -> Option<HashSet<u8>> {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {

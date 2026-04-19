@@ -105,6 +105,7 @@ pub struct LteSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
     pub neighbor_expiry_s: f64,
+    pub modem_type: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -152,6 +153,7 @@ impl Default for LteSensorConfig {
             enabled: true,
             interval_s: None,
             neighbor_expiry_s: 30.0,
+            modem_type: "dbus".to_string(),
         }
     }
 }
@@ -223,12 +225,14 @@ impl Config {
             )));
         }
         let m = &self.mavlink;
-        if m.self_sysid == m.sniffer_sysid {
+        // self_sysid == 0 is the autodiscovery sentinel: take min of available_systems at runtime.
+        // Skip uniqueness checks involving self_sysid in that case.
+        if m.self_sysid != 0 && m.self_sysid == m.sniffer_sysid {
             return Err(ConfigError::Validation(
                 "mavlink.self_sysid must differ from sniffer_sysid".to_string(),
             ));
         }
-        if m.self_sysid == m.bs_sysid {
+        if m.self_sysid != 0 && m.self_sysid == m.bs_sysid {
             return Err(ConfigError::Validation(
                 "mavlink.self_sysid must differ from bs_sysid".to_string(),
             ));
@@ -238,7 +242,7 @@ impl Config {
                 "mavlink.sniffer_sysid must differ from bs_sysid".to_string(),
             ));
         }
-        if m.self_sysid == m.gcs_sysid {
+        if m.self_sysid != 0 && m.self_sysid == m.gcs_sysid {
             return Err(ConfigError::Validation(
                 "mavlink.self_sysid must differ from gcs_sysid".to_string(),
             ));
@@ -415,6 +419,12 @@ impl Config {
                 "sensors.lte.neighbor_expiry_s must be a finite positive number".to_string(),
             ));
         }
+        if !matches!(self.sensors.lte.modem_type.as_str(), "dbus" | "fake") {
+            return Err(ConfigError::Validation(format!(
+                "sensors.lte.modem_type must be \"dbus\" or \"fake\", got {:?}",
+                self.sensors.lte.modem_type
+            )));
+        }
         if self.sensors.ping.host.is_empty() || self.sensors.ping.host.starts_with('-') {
             return Err(ConfigError::Validation(
                 "sensors.ping.host must be a valid hostname or IP address".to_string(),
@@ -513,6 +523,7 @@ host = "10.45.0.2"
 [sensors.lte]
 enabled = true
 neighbor_expiry_s = 30.0
+modem_type = "dbus"
 
 [sensors.cpu_temp]
 enabled = true
@@ -580,6 +591,7 @@ host = "10.45.0.2"
 [sensors.lte]
 enabled = true
 neighbor_expiry_s = 30.0
+modem_type = "dbus"
 
 [sensors.cpu_temp]
 enabled = true
@@ -737,6 +749,7 @@ host = "10.45.0.2"
 [sensors.lte]
 enabled = true
 neighbor_expiry_s = 30.0
+modem_type = "dbus"
 
 [sensors.cpu_temp]
 enabled = true
@@ -925,6 +938,7 @@ host = "192.168.1.1"
 enabled = false
 interval_s = 3.0
 neighbor_expiry_s = 60.0
+modem_type = "dbus"
 
 [sensors.cpu_temp]
 enabled = true
@@ -1476,11 +1490,50 @@ host = "10.45.0.2"
 [sensors.lte]
 enabled = true
 neighbor_expiry_s = 30.0
+modem_type = "dbus"
 
 [sensors.cpu_temp]
 enabled = true
 "#;
         let result: Result<Config, _> = toml::from_str(toml_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_lte_modem_type_dbus_accepted() {
+        let mut config = test_config();
+        config.sensors.lte.modem_type = "dbus".to_string();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_lte_modem_type_fake_accepted() {
+        let mut config = test_config();
+        config.sensors.lte.modem_type = "fake".to_string();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_lte_modem_type_empty_rejected() {
+        let mut config = test_config();
+        config.sensors.lte.modem_type = "".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("sensors.lte.modem_type"));
+    }
+
+    #[test]
+    fn test_lte_modem_type_wrong_case_rejected() {
+        let mut config = test_config();
+        config.sensors.lte.modem_type = "DBUS".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("sensors.lte.modem_type"));
+    }
+
+    #[test]
+    fn test_lte_modem_type_unknown_rejected() {
+        let mut config = test_config();
+        config.sensors.lte.modem_type = "serial".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("sensors.lte.modem_type"));
     }
 }

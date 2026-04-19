@@ -28,7 +28,6 @@ impl TelemetryReporter {
     /// Reads the latest LTE and ping sensor values from Context, constructs
     /// COMMAND_LONG messages, and sends them to both GCS and base station.
     pub async fn run_loop(&self) {
-        let self_sysid = self.ctx.config.mavlink.self_sysid;
         let self_compid = self.ctx.config.mavlink.self_compid;
         let gcs_sysid = self.ctx.config.mavlink.gcs_sysid;
         let bs_sysid = self.ctx.config.mavlink.bs_sysid;
@@ -45,6 +44,13 @@ impl TelemetryReporter {
                     return;
                 }
                 _ = interval.tick() => {
+                    let self_sysid = match self.ctx.self_sysid().await {
+                        Some(v) => v,
+                        None => {
+                            debug!("telemetry: self_sysid not yet resolved (awaiting FC discovery), skipping tick");
+                            continue;
+                        }
+                    };
                     let ping = self.ctx.sensors.ping.read().await.clone().unwrap_or(PingTelemetry::default());
                     let lte = self.ctx.sensors.lte.read().await.clone().unwrap_or(LteReading::default());
 

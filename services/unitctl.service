@@ -1,0 +1,15 @@
+[Unit]
+Description=unitctl onboard controller
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+StandardOutput=journal
+StandardError=journal
+ExecStart=/usr/local/bin/unitctl --config /etc/unitctl/config.toml
+TimeoutStartSec=30s
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target

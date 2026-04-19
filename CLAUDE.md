@@ -35,9 +35,9 @@ make schema
 - Config is loaded via `config::load_config()` and parsed with serde
 - `[general]` section includes `debug` (bool) and `interface` (String, required — the network interface name used for ping sensor binding and IP resolution in MQTT online status)
 - Debug logging is enabled by either `--debug` CLI flag or `general.debug = true` in config
-- `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields
-- `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type`, `device`
-- `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`). Ping sensor uses `general.interface` for binding.
+- `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields. `self_sysid = 0` is the autodiscovery sentinel — the effective sysid is resolved at runtime via `Context::self_sysid()` as the minimum FC sysid in `Context.available_systems` (`self_sysid` uniqueness checks in `Config::validate()` are skipped in this mode; `gcs_sysid`/`sniffer_sysid`/`bs_sysid` uniqueness still applies).
+- `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type` (`rpi`, `usb`, `usb_yuy2`, `siyi`, `openipc`, or `fake` for simulation), `device`
+- `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`). Ping sensor uses `general.interface` for binding. `[sensors.lte]` also requires `modem_type` (`"dbus"` for real ModemManager or `"fake"` for deterministic simulation) and `neighbor_expiry_s` (f64).
 - `[mqtt]` section configures MQTT communication with a central server: `enabled` (bool), `host`, `port` (8883 for TLS), `ca_cert_path`, `client_cert_path`, `client_key_path` (mutual TLS), `env_prefix` (topic namespace), `telemetry_interval_s`
 
 ## Architecture
@@ -52,13 +52,13 @@ The `Task` trait is implemented by all major components. `main.rs` creates a sha
 
 ### Context (`context.rs`)
 
-Shared state hub (Arc-wrapped). Holds config, a broadcast channel (capacity 256) for incoming message routing, an mpsc channel (capacity 500) for outgoing messages, and a RwLock-protected HashSet of discovered system IDs. References `SensorValues` from the sensors module.
+Shared state hub (Arc-wrapped). Holds config, a broadcast channel (capacity 256) for incoming message routing, an mpsc channel (capacity 500) for outgoing messages, and a RwLock-protected HashSet of discovered system IDs. References `SensorValues` from the sensors module. `Context::self_sysid() -> Option<u8>` resolves the effective MAVLink self sysid: returns the configured value when non-zero, or the minimum FC sysid from `available_systems` (autodiscovery), or `None` if no FC has been observed yet.
 
 ### Services (`services/`)
 
 Shared services that run as background tasks and are accessed through `Context`.
 
-- **ModemAccessService** (`services/modem_access.rs`) — Queue-based modem access proxy. Owns an mpsc channel; callers submit AT command requests, a single worker task processes them sequentially against D-Bus (enforcing single-threaded D-Bus constraint). Implements `ModemAccess` trait. Handles modem discovery with auto-retry at startup, stored in `Context` as `Arc<dyn ModemAccess>`. Also defines `ModemAccess` trait, `ModemError`, `ModemType`, `NetworkRegistration`, and D-Bus modem integration (`DbusModemAccess`).
+- **ModemAccessService** (`services/modem_access/`) — Directory module. Queue-based modem access proxy. Owns an mpsc channel; callers submit AT command requests, a single worker task processes them sequentially (enforcing single-threaded constraint). `ModemAccessService::start(cfg, cancel)` branches on `cfg.modem_type`: `"dbus"` performs ModemManager D-Bus discovery with retry (`dbus.rs`), `"fake"` wires the deterministic `FakeModemAccess` simulator (`fake.rs`). Also defines `ModemAccess` trait, `ModemError`, `ModemType`, `NetworkRegistration`. Stored in `Context` as `Arc<dyn ModemAccess>`.
 
 ### MQTT Service (`services/mqtt/`)
 
@@ -91,10 +91,10 @@ Write-on-start module that generates environment files for external services (ma
 
 ### MAVLink Components (`mavlink/`)
 
-- **drone_component.rs** — DroneComponent: TCP client (tcpout) that drains the outgoing message queue at a configurable interval and sends MAVLink v2 messages. Sends heartbeats (MAV_TYPE_ONBOARD_CONTROLLER) every 1s.
+- **drone_component.rs** — DroneComponent: TCP client (tcpout) that drains the outgoing message queue at a configurable interval and sends MAVLink v2 messages. Sends heartbeats (MAV_TYPE_ONBOARD_CONTROLLER) every 1s. The heartbeat task waits for FC discovery, then resolves the sender sysid via `Context::self_sysid()` (supporting `mavlink.self_sysid = 0` autodiscovery) before invoking `heartbeat_loop`.
 - **sniffer_component.rs** — MavlinkSniffer: TCP client (tcpout) that receives MAVLink messages, broadcasts them on the broadcast channel, and discovers flight controller system IDs from heartbeats (ID < 200). Filters out internal component IDs (self, sniffer, base station) to prevent self-discovery.
 - **commands.rs** — 23 custom MAV_CMD_USER_1 subcommands (IDs 31011-31049) for link switching, telemetry reporting, camera control, and GPS management.
-- **telemetry_reporter.rs** — TelemetryReporter: reads sensor values from Context at 1Hz and broadcasts COMMAND_LONG (MAV_CMD_USER_1) messages to GCS and base station. Reports LTE radio (subcmd 31014), LTE IP/ping (subcmd 31015), and neighbor cells (subcmds 31040-31049).
+- **telemetry_reporter.rs** — TelemetryReporter: reads sensor values from Context at 1Hz and broadcasts COMMAND_LONG (MAV_CMD_USER_1) messages to GCS and base station. Reports LTE radio (subcmd 31014), LTE IP/ping (subcmd 31015), and neighbor cells (subcmds 31040-31049). Resolves the sender sysid each tick via `Context::self_sysid()` and skips ticks until FC discovery completes (autodiscovery support).
 - **mod.rs** — Defines `MavFrame` type alias, `build_heartbeat()`, `heartbeat_loop()`, `wait_for_fc()`, `is_fc_sysid()`, and shared connection/backoff helpers.
 - **Not yet implemented:** `switcher.rs` (MavlinkConnectionSwitcher for link failover) is planned for a future phase.
 
@@ -118,10 +118,11 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `CameraConfig` — camera env file settings: gcs_ip, env_path, video port, resolution, framerate, bitrate, flip, camera_type, device
 - `MavlinkEnvWriter` — writes mavlink env file at startup from mavlink config (defined in `env/mavlink_env.rs`)
 - `CameraEnvWriter` — writes camera env file at startup from camera config (defined in `env/camera_env.rs`)
-- `ModemAccessService` — queue-based modem access proxy, serializes AT commands through a worker task (defined in `services/modem_access.rs`)
-- `ModemAccess` trait — async modem interface (model, command, imsi, registration_status) defined in `services/modem_access.rs`
-- `NetworkRegistration` — network registration status enum (defined in `services/modem_access.rs`)
-- `Context` — shared state with channels, system discovery, sensor values, and modem access
+- `ModemAccessService` — queue-based modem access proxy, serializes AT commands through a worker task (defined in `services/modem_access/mod.rs`)
+- `ModemAccess` trait — async modem interface (model, command, imsi, registration_status) defined in `services/modem_access/mod.rs`
+- `FakeModemAccess` — deterministic ModemAccess implementation for simulation; monotonic counter drives drifting LTE signal values (defined in `services/modem_access/fake.rs`)
+- `NetworkRegistration` — network registration status enum (defined in `services/modem_access/mod.rs`)
+- `Context` — shared state with channels, system discovery, sensor values, and modem access. `self_sysid()` async method resolves the effective MAVLink self sysid (configured value if non-zero, else min of `available_systems`).
 - `SensorValues` — RwLock-wrapped optional readings for ping, LTE, and CPU temperature (defined in `sensors/mod.rs`)
 - `PingTelemetry` — reachable, latency_ms, loss_percent (defined in `messages/telemetry.rs`; aliased as `PingReading` in `sensors/ping.rs`)
 - `LteTelemetry` — signal quality fields and neighbor cells (defined in `messages/telemetry.rs`)
@@ -160,3 +161,8 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 ## Dependencies
 
 tokio, mavlink (ardupilotmega + tcp), tokio-util, serde, toml, tracing, tracing-subscriber, clap, async-trait, regex, modemmanager, zbus, nix (signal, process, net), rumqttc (use-rustls), serde_json, chrono (serde), x509-parser, schemars (chrono feature, also in build-dependencies), rand, thiserror
+
+## Conventions
+
+- Backend lint gate is `cargo clippy -- -D warnings` — warnings fail CI.
+- Design specs and implementation plans live in `docs/plans/` (completed plans move to `docs/plans/completed/`). Do not use `docs/superpowers/`.

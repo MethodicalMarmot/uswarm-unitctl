@@ -1,0 +1,10 @@
+target/
+.git/
+.cargo/
+.rustup/
+.pkgconfig/
+.python/
+.pi/
+.ralphex/
+docs/
+*.swp

@@ -43,7 +43,7 @@ camera_type = "rpi"
 device = "/dev/video1"
 
 [sensors]
-default_interval_s = 1.0
+default_interval_s = 5.0
 
 [sensors.ping]
 enabled = true
@@ -57,12 +57,12 @@ neighbor_expiry_s = 30.0
 # Modem backend: "dbus" (real ModemManager) or "fake" (deterministic simulator)
 modem_type = "dbus"
 
-[sensors.cpu_temp]
+[sensors.system]
 enabled = true
-# interval_s = 5.0
+# interval_s = 5.0   # falls back to sensors.default_interval_s
 
 # MQTT communication with central server
-# Publishes sensor telemetry (LTE, ping, CPU temp) and receives commands
+# Publishes sensor telemetry (LTE, ping, system) and receives commands
 # (config_update, get_config, update_request, modem_commands).
 # Authentication uses mutual TLS; the node ID is extracted from the client
 # certificate's CN field.
@@ -78,5 +78,8 @@ client_cert_path = "/etc/unitctl/certs/client.pem"
 client_key_path = "/etc/unitctl/certs/client.key"
 # Environment prefix for MQTT topics (e.g. "prod", "staging")
 env_prefix = "prod"
-# Telemetry publish interval in seconds
-telemetry_interval_s = 1.0
+# Telemetry publish interval in seconds.
+# Should be >= sensors.default_interval_s (and any per-sensor interval_s
+# override): publishing faster than samples are taken just republishes the
+# previous reading with a fresh timestamp.
+telemetry_interval_s = 5.0

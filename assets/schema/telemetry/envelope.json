@@ -17,6 +17,104 @@
     }
   },
   "definitions": {
+    "CameraFormat": {
+      "type": "object",
+      "required": [
+        "fourcc",
+        "height",
+        "width"
+      ],
+      "properties": {
+        "fourcc": {
+          "type": "string"
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "CameraInfo": {
+      "type": "object",
+      "required": [
+        "device",
+        "formats"
+      ],
+      "properties": {
+        "device": {
+          "type": "string"
+        },
+        "driver": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "formats": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CameraFormat"
+          }
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DiskUsage": {
+      "type": "object",
+      "required": [
+        "available_bytes",
+        "mount_point",
+        "total_bytes"
+      ],
+      "properties": {
+        "available_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "mount_point": {
+          "type": "string"
+        },
+        "total_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "LoadAverage": {
+      "type": "object",
+      "required": [
+        "fifteen",
+        "five",
+        "one"
+      ],
+      "properties": {
+        "fifteen": {
+          "type": "number",
+          "format": "double"
+        },
+        "five": {
+          "type": "number",
+          "format": "double"
+        },
+        "one": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
     "LteNeighborCell": {
       "description": "A single LTE neighbor cell observation.",
       "type": "object",
@@ -98,6 +196,62 @@
         }
       }
     },
+    "NetworkInterfaceTelemetry": {
+      "type": "object",
+      "required": [
+        "ipv4",
+        "name",
+        "rx_bps",
+        "tx_bps"
+      ],
+      "properties": {
+        "ipv4": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "rx_bps": {
+          "description": "Bits per second since the previous sensor tick.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "tx_bps": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RamUsage": {
+      "type": "object",
+      "required": [
+        "available_bytes",
+        "total_bytes",
+        "used_bytes"
+      ],
+      "properties": {
+        "available_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "total_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "used_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
     "TelemetryData": {
       "oneOf": [
         {
@@ -134,11 +288,15 @@
           "description": "LTE serving-cell signal quality and neighbor cells.",
           "type": "object",
           "required": [
+            "imsi",
             "neighbors",
             "signal",
             "type"
           ],
           "properties": {
+            "imsi": {
+              "type": "string"
+            },
             "neighbors": {
               "type": "array",
               "items": {
@@ -157,22 +315,66 @@
           }
         },
         {
-          "description": "CPU temperature telemetry.",
+          "description": "Aggregate host telemetry: CPU temp/usage, memory, disks, load, uptime, network interfaces (with bandwidth + addresses), and connected cameras.",
           "type": "object",
           "required": [
-            "temperature_c",
-            "type"
+            "cameras",
+            "cpu_usage_percent",
+            "disks",
+            "load_avg",
+            "network_interfaces",
+            "ram",
+            "type",
+            "uptime_s"
           ],
           "properties": {
-            "temperature_c": {
-              "type": "number",
+            "cameras": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/CameraInfo"
+              }
+            },
+            "cpu_temperature_c": {
+              "description": "CPU temperature in degrees Celsius. `None` if the sysfs read failed.",
+              "type": [
+                "number",
+                "null"
+              ],
               "format": "double"
+            },
+            "cpu_usage_percent": {
+              "description": "Aggregate CPU usage across all cores, 0..100.",
+              "type": "number",
+              "format": "float"
+            },
+            "disks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/DiskUsage"
+              }
+            },
+            "load_avg": {
+              "$ref": "#/definitions/LoadAverage"
+            },
+            "network_interfaces": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/NetworkInterfaceTelemetry"
+              }
+            },
+            "ram": {
+              "$ref": "#/definitions/RamUsage"
             },
             "type": {
               "type": "string",
               "enum": [
-                "CpuTemp"
+                "System"
               ]
+            },
+            "uptime_s": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
             }
           }
         }

@@ -191,24 +191,6 @@
         }
       ]
     },
-    "CpuTempSensorConfig": {
-      "type": "object",
-      "required": [
-        "enabled"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "interval_s": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        }
-      }
-    },
     "FcConfig": {
       "type": "object",
       "required": [
@@ -445,15 +427,12 @@
     "SensorsConfig": {
       "type": "object",
       "required": [
-        "cpu_temp",
         "default_interval_s",
         "lte",
-        "ping"
+        "ping",
+        "system"
       ],
       "properties": {
-        "cpu_temp": {
-          "$ref": "#/definitions/CpuTempSensorConfig"
-        },
         "default_interval_s": {
           "type": "number",
           "format": "double"
@@ -463,6 +442,27 @@
         },
         "ping": {
           "$ref": "#/definitions/PingSensorConfig"
+        },
+        "system": {
+          "$ref": "#/definitions/SystemSensorConfig"
+        }
+      }
+    },
+    "SystemSensorConfig": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "interval_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
         }
       }
     }

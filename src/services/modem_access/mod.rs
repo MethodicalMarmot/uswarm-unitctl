@@ -81,7 +81,8 @@ pub trait ModemAccess: Send + Sync {
     /// Read SIM IMSI via AT+CIMI.
     async fn imsi(&self) -> Result<String, ModemError> {
         let resp = self.command("AT+CIMI", 3000).await?;
-        Ok(resp.trim().to_string())
+        parse_cimi_response(&resp)
+            .ok_or_else(|| ModemError::Dbus("failed to parse IMSI from AT+CIMI response".into()))
     }
 
     /// Query network registration status via AT+CREG? or AT+CEREG?.
@@ -396,6 +397,15 @@ fn parse_registration_response(response: &str) -> Option<NetworkRegistration> {
     None
 }
 
+/// Parse AT+CIMI response and return the first IMSI-looking line.
+fn parse_cimi_response(response: &str) -> Option<String> {
+    response
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && line.chars().all(|c| c.is_ascii_digit()))
+        .map(str::to_string)
+}
+
 pub mod dbus;
 pub mod fake;
 
@@ -702,6 +712,20 @@ mod tests {
             parse_registration_response(resp),
             Some(NetworkRegistration::Searching)
         );
+    }
+
+    #[test]
+    fn test_parse_cimi_response_ignores_ok() {
+        assert_eq!(
+            parse_cimi_response("310260123456789\r\nOK"),
+            Some("310260123456789".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_cimi_response_rejects_non_digits() {
+        assert_eq!(parse_cimi_response("OK"), None);
+        assert_eq!(parse_cimi_response("+CME ERROR: 10"), None);
     }
 
     // --- ModemAccessService tests ---

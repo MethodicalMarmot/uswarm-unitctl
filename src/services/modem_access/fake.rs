@@ -92,7 +92,7 @@ impl FakeModemAccess {
         // Two cells with distinct pcids that drift independently.
         let cells = [
             (
-                100i32,         // pcid
+                100i32,                        // pcid
                 -12 + ((n % 5) as i32 - 2),    // rsrq
                 -100 + ((n % 21) as i32 - 10), // rsrp
                 -75 + ((n % 11) as i32 - 5),   // rssi

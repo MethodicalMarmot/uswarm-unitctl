@@ -63,6 +63,9 @@ make schema
 - uuid (command UUID generation)
 - chrono (ISO 8601 timestamps)
 - x509-parser (X.509 certificate parsing for node ID extraction)
+- sysinfo (CPU/RAM/disk/network host metrics)
+- v4l (V4L2 camera enumeration and capability probing)
+- glob (filesystem globbing for `/dev/video*` discovery)
 
 ## Prerequisites
 
@@ -221,20 +224,21 @@ tty = "/dev/ttyFC"           # Flight controller serial device
 baudrate = 57600             # Serial baud rate
 
 [sensors]
-default_interval_s = 1.0     # Default polling interval for all sensors
+default_interval_s = 5.0     # Default polling interval for all sensors
 
 [sensors.ping]
 enabled = true               # Enable ping sensor
-# interval_s = 1.0           # Override default interval (optional)
+# interval_s = 5.0           # Override default interval (optional)
 host = "10.45.0.2"           # Target host to ping
 
 [sensors.lte]
 enabled = true               # Enable LTE telemetry sensor
-# interval_s = 1.0           # Override default interval (optional)
+# interval_s = 5.0           # Override default interval (optional)
 neighbor_expiry_s = 30.0     # Remove neighbors not seen for this many seconds
+modem_type = "dbus"          # "dbus" (real ModemManager) or "fake" (simulator)
 
-[sensors.cpu_temp]
-enabled = true               # Enable CPU temperature sensor
+[sensors.system]
+enabled = true               # Enable host-wide system telemetry sensor
 # interval_s = 5.0           # Override default interval (optional)
 
 [camera]
@@ -300,7 +304,7 @@ mavlink-routerd (TCP:5760)
     |       |
     |       +-- PingSensor -- pings target host, tracks latency and loss
     |       +-- LteSensor -- reads LTE signal quality via modem access service
-    |       +-- CpuTempSensor -- reads CPU temperature from sysfs
+    |       +-- SystemSensor -- gathers CPU/RAM/disks/load/uptime/net/cameras
     |
     +-- MavlinkEnvWriter -- writes mavlink.env at startup, then exits
     +-- CameraEnvWriter -- writes camera.env at startup, then exits
@@ -334,7 +338,7 @@ mavlink-routerd (TCP:5760)
 When `mqtt.enabled = true`, unitctl connects to a central MQTT broker using mutual TLS for bidirectional communication.
 
 - **MqttTransport** (`services/mqtt/transport.rs`) - Manages broker connection with mutual TLS. Handles reconnection, publish/subscribe, and broadcasts incoming messages on an event channel. Node ID is extracted from the client certificate CN. Configures an MQTT Last Will and Testament (LWT) with an offline status payload for automatic offline detection.
-- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) - Periodically reads sensor values from Context and publishes them as JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Sensors with no reading are skipped.
+- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) - Periodically reads sensor values from Context and publishes them as JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|system}`. Sensors with no reading are skipped.
 - **StatusPublisher** (`services/mqtt/status.rs`) - Publishes a retained online status message (with session ID, version, and resolved IPv4 from `general.interface`) to `{env_prefix}/nodes/{nodeId}/status` on each connect/reconnect. Works with the LWT for automatic offline detection.
 - **CommandProcessor** (`services/mqtt/commands.rs`) - Subscribes to command topics, dispatches to registered handlers, and manages the command lifecycle (accepted -> in_progress -> completed/failed). Supports TTL-based expiry.
 - **Command Handlers** (`services/mqtt/handlers/`) - `get_config` returns current config, `config_update` applies changes (placeholder), `update_request` acknowledges updates (placeholder), `modem_commands` routes AT commands through ModemAccess.
@@ -347,7 +351,7 @@ The sensor subsystem (`sensors/`) provides a trait-based framework for gathering
 - **SensorManager** - Reads config, builds list of enabled sensors, spawns each as a tokio task.
 - **PingSensor** (`sensors/ping.rs`) - Spawns a `ping` subprocess bound to `general.interface` via `-I`, sends periodic SIGQUIT to get stats, parses latency and packet loss. Stores `PingReading { reachable, latency_ms, loss_percent }`.
 - **LteSensor** (`sensors/lte.rs`) - Reads LTE signal quality via modem access service from Context. Waits for modem availability at startup, detects modem type (SIMCOM 7600, Quectel EM12/EM06E/EM06GL), then sends modem-specific AT commands to read signal quality. Stores `LteReading { signal, neighbors }`.
-- **CpuTempSensor** (`sensors/cpu_temp.rs`) - Reads `/sys/class/thermal/thermal_zone0/temp`, converts millidegrees to degrees. Stores `CpuTempReading { temperature_c }`.
+- **SystemSensor** (`sensors/system.rs`) - Gathers host-wide telemetry once per interval: CPU temperature (sysfs thermal zone), aggregate CPU usage and memory (via `sysinfo`), disks, load average, uptime, per-interface bandwidth (delta vs previous tick) joined with IPv4 addresses from `nix::ifaddrs`, and connected cameras enumerated/probed via the `v4l` crate. Stores `SystemTelemetry`.
 
 Each sensor can be independently enabled/disabled and has a configurable polling interval (with a global default fallback).
 

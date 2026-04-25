@@ -24,6 +24,9 @@ schemars = { version = "0.8", features = ["chrono"] }
 thiserror = "2"
 x509-parser = "0.16"
 rand = "0.10.0"
+sysinfo = { version = "0.32", default-features = false, features = ["system", "disk", "network"] }
+v4l = "0.14"
+glob = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

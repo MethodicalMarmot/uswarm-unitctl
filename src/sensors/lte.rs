@@ -16,6 +16,7 @@ use super::Sensor;
 /// Current LTE sensor reading.
 #[derive(Default, Debug, Clone, serde::Serialize)]
 pub struct LteReading {
+    pub imsi: String,
     pub signal: LteSignalQuality,
     pub neighbors: HashMap<i32, LteNeighborCell>,
 }
@@ -223,6 +224,13 @@ impl LteSensor {
         };
 
         let mut neighbors: HashMap<i32, LteNeighborCell> = HashMap::new();
+        let imsi = match modem.imsi().await {
+            Ok(imsi) => imsi,
+            Err(e) => {
+                warn!(error = %e, "failed to read modem IMSI");
+                String::new()
+            }
+        };
         let mut at_counter: u64 = 1; // Start at 1 so first query (counter=2) is serving cell
         let has_neighbors = supports_neighbor_query(modem_type);
 
@@ -285,6 +293,7 @@ impl LteSensor {
                                 "serving cell updated"
                             );
                             let reading = LteReading {
+                                imsi: imsi.clone(),
                                 signal,
                                 neighbors: neighbors.clone(),
                             };
@@ -375,6 +384,10 @@ mod tests {
                 return Err(ModemError::Dbus("no mock response configured".to_string()));
             }
             responses.remove(0)
+        }
+
+        async fn imsi(&self) -> Result<String, ModemError> {
+            Ok("310260123456789".to_string())
         }
     }
 

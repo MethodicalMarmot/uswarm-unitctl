@@ -14,7 +14,7 @@ use super::transport::MqttTransport;
 
 /// Publishes sensor telemetry data to MQTT topics at a configurable interval.
 ///
-/// Reads sensor values from Context (LTE, ping, CPU temp), wraps each in a
+/// Reads sensor values from Context (LTE, ping, system), wraps each in a
 /// `TelemetryEnvelope` with a UTC timestamp, and publishes to the appropriate
 /// telemetry topic. Sensors with no reading (None) are skipped.
 pub struct TelemetryPublisher {
@@ -60,13 +60,13 @@ impl TelemetryPublisher {
             self.publish_one("ping", &envelope).await;
         }
 
-        // Publish CPU temperature telemetry
-        if let Some(reading) = self.ctx.sensors.cpu_temp.read().await.clone() {
+        // Publish system telemetry
+        if let Some(reading) = self.ctx.sensors.system.read().await.clone() {
             let envelope = TelemetryEnvelope {
                 ts,
-                data: TelemetryData::CpuTemp(reading),
+                data: TelemetryData::System(reading),
             };
-            self.publish_one("cpu_temp", &envelope).await;
+            self.publish_one("system", &envelope).await;
         }
     }
 
@@ -111,7 +111,7 @@ impl Task for TelemetryPublisher {
 mod tests {
     use super::*;
     use crate::messages::telemetry::{
-        CpuTempTelemetry, LteSignalQuality, LteTelemetry, PingTelemetry, TelemetryEnvelope,
+        LteSignalQuality, LteTelemetry, PingTelemetry, TelemetryEnvelope,
     };
     use chrono::TimeZone;
 
@@ -155,6 +155,7 @@ mod tests {
         let envelope = TelemetryEnvelope {
             ts: sample_ts(),
             data: TelemetryData::Lte(LteTelemetry {
+                imsi: "310260123456789".to_string(),
                 signal,
                 neighbors: vec![],
             }),
@@ -164,24 +165,10 @@ mod tests {
 
         assert!(parsed["ts"].as_str().unwrap().contains("2026-03-23"));
         let data = &parsed["data"];
+        assert_eq!(data["imsi"], "310260123456789");
         assert_eq!(data["signal"]["rsrp"], -85);
         assert_eq!(data["signal"]["rssi"], -60);
         assert_eq!(data["signal"]["pcid"], 42);
-    }
-
-    #[test]
-    fn test_cpu_temp_telemetry_envelope() {
-        let envelope = TelemetryEnvelope {
-            ts: sample_ts(),
-            data: TelemetryData::CpuTemp(CpuTempTelemetry {
-                temperature_c: 42.5,
-            }),
-        };
-        let json = serde_json::to_string(&envelope).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        assert!(parsed["ts"].as_str().unwrap().contains("2026-03-23"));
-        assert_eq!(parsed["data"]["temperature_c"], 42.5);
     }
 
     #[test]
@@ -203,18 +190,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cpu_temp_envelope_has_type_tag() {
+    fn test_system_telemetry_envelope() {
+        use crate::messages::telemetry::SystemTelemetry;
         let envelope = TelemetryEnvelope {
             ts: sample_ts(),
-            data: TelemetryData::CpuTemp(CpuTempTelemetry {
-                temperature_c: 50.0,
+            data: TelemetryData::System(SystemTelemetry {
+                cpu_usage_percent: 12.5,
+                uptime_s: 100,
+                ..SystemTelemetry::default()
             }),
         };
         let json = serde_json::to_string(&envelope).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        assert!(parsed.get("ts").is_some());
-        assert_eq!(parsed["data"]["type"], "CpuTemp");
+        assert_eq!(parsed["data"]["type"], "System");
+        assert_eq!(parsed["data"]["uptime_s"], 100);
     }
 
     // --- TelemetryPublisher None-skipping tests ---
@@ -228,7 +217,7 @@ mod tests {
         // All readings should be None initially
         assert!(ctx.sensors.ping.read().await.is_none());
         assert!(ctx.sensors.lte.read().await.is_none());
-        assert!(ctx.sensors.cpu_temp.read().await.is_none());
+        assert!(ctx.sensors.system.read().await.is_none());
 
         // Create a transport with dummy client for testing
         let mqtt_config = crate::config::MqttConfig::default();
@@ -265,7 +254,7 @@ mod tests {
 
         assert!(ctx.sensors.ping.read().await.is_some());
         assert!(ctx.sensors.lte.read().await.is_none());
-        assert!(ctx.sensors.cpu_temp.read().await.is_none());
+        assert!(ctx.sensors.system.read().await.is_none());
 
         let opts = rumqttc::MqttOptions::new("test", "localhost", 1883);
         let (client, _eventloop) = rumqttc::AsyncClient::new(opts, 1);
@@ -280,7 +269,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let publisher = TelemetryPublisher::new(transport, ctx, Duration::from_secs(1), cancel);
 
-        // Should publish ping but skip lte and cpu_temp without error
+        // Should publish ping but skip lte and system without error
         publisher.publish_telemetry().await;
     }
 

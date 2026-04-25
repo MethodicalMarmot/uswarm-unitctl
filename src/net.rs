@@ -34,6 +34,34 @@ pub fn resolve_ipv4(interface: &str) -> Result<Ipv4Addr, ResolveIpError> {
     }
 }
 
+/// Build a map of interface name to its assigned IPv4 addresses (as strings).
+///
+/// On `getifaddrs` failure returns an empty map.
+pub fn ipv4_map_for_all_interfaces() -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    let addrs = match getifaddrs() {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "getifaddrs failed; per-interface IPv4 telemetry will be empty");
+            return out;
+        }
+    };
+    for ifa in addrs {
+        let Some(addr) = ifa.address else {
+            continue;
+        };
+        let Some(sin) = addr.as_sockaddr_in() else {
+            continue;
+        };
+        out.entry(ifa.interface_name.clone())
+            .or_default()
+            .push(sin.ip().to_string());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

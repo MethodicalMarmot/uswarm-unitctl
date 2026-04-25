@@ -1,6 +1,6 @@
-pub mod cpu_temp;
 pub mod lte;
 pub mod ping;
+pub mod system;
 
 use std::sync::{Arc, Mutex};
 
@@ -11,19 +11,19 @@ use tracing::info;
 
 use crate::config::SensorsConfig;
 use crate::context::Context;
-use crate::messages::telemetry::{CpuTempTelemetry, PingTelemetry};
+use crate::messages::telemetry::{PingTelemetry, SystemTelemetry};
 use crate::sensors::lte::LteReading;
 use crate::Task;
 
-use self::cpu_temp::CpuTempSensor;
 use self::lte::LteSensor;
 use self::ping::PingSensor;
+use self::system::SystemSensor;
 
 /// Shared sensor values, updated by sensor tasks and read by telemetry reporters.
 pub struct SensorValues {
     pub ping: RwLock<Option<PingTelemetry>>,
     pub lte: RwLock<Option<LteReading>>,
-    pub cpu_temp: RwLock<Option<CpuTempTelemetry>>,
+    pub system: RwLock<Option<SystemTelemetry>>,
 }
 
 /// A sensor that runs as its own tokio task, gathering telemetry data
@@ -73,10 +73,10 @@ impl SensorManager {
             )));
         }
 
-        if config.cpu_temp.enabled {
-            info!("sensor enabled: cpu_temp");
-            sensors.push(Box::new(CpuTempSensor::new(
-                &config.cpu_temp,
+        if config.system.enabled {
+            info!("sensor enabled: system");
+            sensors.push(Box::new(SystemSensor::new(
+                &config.system,
                 config.default_interval_s,
             )));
         }
@@ -125,7 +125,7 @@ impl Task for SensorManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{CpuTempSensorConfig, LteSensorConfig, PingSensorConfig, SensorsConfig};
+    use crate::config::{LteSensorConfig, PingSensorConfig, SensorsConfig, SystemSensorConfig};
 
     fn make_manager_from_sensors(sensors: Vec<Box<dyn Sensor>>) -> Arc<SensorManager> {
         let config = crate::config::tests::test_config();
@@ -149,9 +149,9 @@ mod tests {
                 enabled: false,
                 ..LteSensorConfig::default()
             },
-            cpu_temp: CpuTempSensorConfig {
+            system: SystemSensorConfig {
                 enabled: false,
-                ..CpuTempSensorConfig::default()
+                ..SystemSensorConfig::default()
             },
         };
         let app_config = crate::config::tests::test_config();
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_sensor_manager_count_with_defaults() {
-        // With default config, all sensors are enabled (ping, lte, cpu_temp)
+        // With default config, all sensors are enabled (ping, lte, system).
         let config = SensorsConfig::default();
         let app_config = crate::config::tests::test_config();
         let ctx = Context::new(app_config);
@@ -228,9 +228,9 @@ mod tests {
                 enabled: false,
                 ..LteSensorConfig::default()
             },
-            cpu_temp: CpuTempSensorConfig {
+            system: SystemSensorConfig {
                 enabled: false,
-                ..CpuTempSensorConfig::default()
+                ..SystemSensorConfig::default()
             },
         };
         let app_config = crate::config::tests::test_config();
@@ -255,9 +255,9 @@ mod tests {
                 enabled: true,
                 ..LteSensorConfig::default()
             },
-            cpu_temp: CpuTempSensorConfig {
+            system: SystemSensorConfig {
                 enabled: false,
-                ..CpuTempSensorConfig::default()
+                ..SystemSensorConfig::default()
             },
         };
         let app_config = crate::config::tests::test_config();
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sensor_manager_only_cpu_temp_enabled() {
+    fn test_sensor_manager_only_system_enabled() {
         let config = SensorsConfig {
             default_interval_s: 1.0,
             ping: PingSensorConfig {
@@ -282,9 +282,9 @@ mod tests {
                 enabled: false,
                 ..LteSensorConfig::default()
             },
-            cpu_temp: CpuTempSensorConfig {
+            system: SystemSensorConfig {
                 enabled: true,
-                ..CpuTempSensorConfig::default()
+                ..SystemSensorConfig::default()
             },
         };
         let app_config = crate::config::tests::test_config();
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(manager.sensors.lock().unwrap().as_ref().unwrap().len(), 1);
         assert_eq!(
             manager.sensors.lock().unwrap().as_ref().unwrap()[0].name(),
-            "cpu_temp"
+            "system"
         );
     }
 
@@ -309,9 +309,9 @@ mod tests {
                 enabled: false,
                 ..LteSensorConfig::default()
             },
-            cpu_temp: CpuTempSensorConfig {
+            system: SystemSensorConfig {
                 enabled: true,
-                ..CpuTempSensorConfig::default()
+                ..SystemSensorConfig::default()
             },
         };
         let app_config = crate::config::tests::test_config();
@@ -321,7 +321,7 @@ mod tests {
         let guard = manager.sensors.lock().unwrap();
         let sensors = guard.as_ref().unwrap();
         assert_eq!(sensors[0].name(), "ping");
-        assert_eq!(sensors[1].name(), "cpu_temp");
+        assert_eq!(sensors[1].name(), "system");
     }
 
     #[tokio::test]

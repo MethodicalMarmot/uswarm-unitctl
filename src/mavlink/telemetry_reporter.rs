@@ -333,6 +333,7 @@ mod tests {
 
     fn sample_lte_reading() -> LteReading {
         LteReading {
+            imsi: "310260123456789".to_string(),
             signal: LteSignalQuality {
                 rsrq: -10,
                 rsrp: -85,
@@ -389,6 +390,7 @@ mod tests {
     #[test]
     fn test_lte_radio_telemetry_zero_values() {
         let lte = LteReading {
+            imsi: "310260123456789".to_string(),
             signal: LteSignalQuality {
                 rsrq: 0,
                 rsrp: 0,
@@ -413,6 +415,7 @@ mod tests {
     #[test]
     fn test_lte_radio_telemetry_negative_values() {
         let lte = LteReading {
+            imsi: "310260123456789".to_string(),
             signal: LteSignalQuality {
                 rsrq: -20,
                 rsrp: -140,

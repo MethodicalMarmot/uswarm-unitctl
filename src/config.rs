@@ -90,7 +90,7 @@ pub struct SensorsConfig {
     pub default_interval_s: f64,
     pub ping: PingSensorConfig,
     pub lte: LteSensorConfig,
-    pub cpu_temp: CpuTempSensorConfig,
+    pub system: SystemSensorConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -109,7 +109,7 @@ pub struct LteSensorConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
-pub struct CpuTempSensorConfig {
+pub struct SystemSensorConfig {
     pub enabled: bool,
     pub interval_s: Option<f64>,
 }
@@ -129,10 +129,10 @@ pub struct MqttConfig {
 impl Default for SensorsConfig {
     fn default() -> Self {
         Self {
-            default_interval_s: 1.0,
+            default_interval_s: 5.0,
             ping: PingSensorConfig::default(),
             lte: LteSensorConfig::default(),
-            cpu_temp: CpuTempSensorConfig::default(),
+            system: SystemSensorConfig::default(),
         }
     }
 }
@@ -158,7 +158,7 @@ impl Default for LteSensorConfig {
     }
 }
 
-impl Default for CpuTempSensorConfig {
+impl Default for SystemSensorConfig {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -177,7 +177,7 @@ impl Default for MqttConfig {
             client_cert_path: "/etc/unitctl/certs/client.pem".to_string(),
             client_key_path: "/etc/unitctl/certs/client.key".to_string(),
             env_prefix: "prod".to_string(),
-            telemetry_interval_s: 1.0,
+            telemetry_interval_s: 5.0,
         }
     }
 }
@@ -405,10 +405,10 @@ impl Config {
                 ));
             }
         }
-        if let Some(v) = self.sensors.cpu_temp.interval_s {
+        if let Some(v) = self.sensors.system.interval_s {
             if !v.is_finite() || v <= 0.0 {
                 return Err(ConfigError::Validation(
-                    "sensors.cpu_temp.interval_s must be a finite positive number".to_string(),
+                    "sensors.system.interval_s must be a finite positive number".to_string(),
                 ));
             }
         }
@@ -514,7 +514,7 @@ camera_type = "rpi"
 device = "/dev/video1"
 
 [sensors]
-default_interval_s = 1.0
+default_interval_s = 5.0
 
 [sensors.ping]
 enabled = true
@@ -525,7 +525,7 @@ enabled = true
 neighbor_expiry_s = 30.0
 modem_type = "dbus"
 
-[sensors.cpu_temp]
+[sensors.system]
 enabled = true
 
 [mqtt]
@@ -582,7 +582,7 @@ camera_type = "usb"
 device = "/dev/video0"
 
 [sensors]
-default_interval_s = 1.0
+default_interval_s = 5.0
 
 [sensors.ping]
 enabled = true
@@ -593,7 +593,7 @@ enabled = true
 neighbor_expiry_s = 30.0
 modem_type = "dbus"
 
-[sensors.cpu_temp]
+[sensors.system]
 enabled = true
 
 [mqtt]
@@ -665,15 +665,15 @@ telemetry_interval_s = 1.0
         assert_eq!(config.camera.flip, 0);
         assert_eq!(config.camera.camera_type, "rpi");
         assert_eq!(config.camera.device, "/dev/video1");
-        assert_eq!(config.sensors.default_interval_s, 1.0);
+        assert_eq!(config.sensors.default_interval_s, 5.0);
         assert!(config.sensors.ping.enabled);
         assert_eq!(config.sensors.ping.interval_s, None);
         assert_eq!(config.sensors.ping.host, "10.45.0.2");
         assert!(config.sensors.lte.enabled);
         assert_eq!(config.sensors.lte.interval_s, None);
         assert_eq!(config.sensors.lte.neighbor_expiry_s, 30.0);
-        assert!(config.sensors.cpu_temp.enabled);
-        assert_eq!(config.sensors.cpu_temp.interval_s, None);
+        assert!(config.sensors.system.enabled);
+        assert_eq!(config.sensors.system.interval_s, None);
     }
 
     #[test]
@@ -751,7 +751,7 @@ enabled = true
 neighbor_expiry_s = 30.0
 modem_type = "dbus"
 
-[sensors.cpu_temp]
+[sensors.system]
 enabled = true
 "#;
         let result: Result<Config, _> = toml::from_str(toml_str);
@@ -877,15 +877,15 @@ enabled = true
     fn test_sensor_config_values() {
         let config = test_config();
 
-        assert_eq!(config.sensors.default_interval_s, 1.0);
+        assert_eq!(config.sensors.default_interval_s, 5.0);
         assert!(config.sensors.ping.enabled);
         assert_eq!(config.sensors.ping.interval_s, None);
         assert_eq!(config.sensors.ping.host, "10.45.0.2");
         assert!(config.sensors.lte.enabled);
         assert_eq!(config.sensors.lte.interval_s, None);
         assert_eq!(config.sensors.lte.neighbor_expiry_s, 30.0);
-        assert!(config.sensors.cpu_temp.enabled);
-        assert_eq!(config.sensors.cpu_temp.interval_s, None);
+        assert!(config.sensors.system.enabled);
+        assert_eq!(config.sensors.system.interval_s, None);
     }
 
     #[test]
@@ -940,7 +940,7 @@ interval_s = 3.0
 neighbor_expiry_s = 60.0
 modem_type = "dbus"
 
-[sensors.cpu_temp]
+[sensors.system]
 enabled = true
 interval_s = 10.0
 
@@ -966,8 +966,8 @@ telemetry_interval_s = 1.0
         assert_eq!(config.sensors.lte.interval_s, Some(3.0));
         assert_eq!(config.sensors.lte.neighbor_expiry_s, 60.0);
 
-        assert!(config.sensors.cpu_temp.enabled);
-        assert_eq!(config.sensors.cpu_temp.interval_s, Some(10.0));
+        assert!(config.sensors.system.enabled);
+        assert_eq!(config.sensors.system.interval_s, Some(10.0));
     }
 
     #[test]
@@ -1019,9 +1019,16 @@ telemetry_interval_s = 1.0
     }
 
     #[test]
-    fn test_negative_cpu_temp_interval_rejected() {
+    fn test_system_sensor_default() {
+        let config = test_config();
+        assert!(config.sensors.system.enabled);
+        assert_eq!(config.sensors.system.interval_s, None);
+    }
+
+    #[test]
+    fn test_system_sensor_negative_interval_rejected() {
         let mut config = test_config();
-        config.sensors.cpu_temp.interval_s = Some(-1.0);
+        config.sensors.system.interval_s = Some(-1.0);
         assert!(config.validate().is_err());
     }
 
@@ -1052,12 +1059,12 @@ telemetry_interval_s = 1.0
         config.sensors.default_interval_s = 2.0;
         config.sensors.ping.interval_s = Some(0.5);
         config.sensors.lte.interval_s = Some(3.0);
-        config.sensors.cpu_temp.interval_s = Some(10.0);
+        config.sensors.system.interval_s = Some(10.0);
 
         assert!(config.validate().is_ok());
         assert_eq!(config.sensors.ping.interval_s, Some(0.5));
         assert_eq!(config.sensors.lte.interval_s, Some(3.0));
-        assert_eq!(config.sensors.cpu_temp.interval_s, Some(10.0));
+        assert_eq!(config.sensors.system.interval_s, Some(10.0));
     }
 
     #[test]
@@ -1341,7 +1348,7 @@ telemetry_interval_s = 1.0
         assert!(!default.enabled);
         assert_eq!(default.host, "mqtt.example.com");
         assert_eq!(default.port, 8883);
-        assert_eq!(default.telemetry_interval_s, 1.0);
+        assert_eq!(default.telemetry_interval_s, 5.0);
     }
 
     #[test]
@@ -1481,7 +1488,7 @@ camera_type = "rpi"
 device = "/dev/video1"
 
 [sensors]
-default_interval_s = 1.0
+default_interval_s = 5.0
 
 [sensors.ping]
 enabled = true
@@ -1492,7 +1499,7 @@ enabled = true
 neighbor_expiry_s = 30.0
 modem_type = "dbus"
 
-[sensors.cpu_temp]
+[sensors.system]
 enabled = true
 "#;
         let result: Result<Config, _> = toml::from_str(toml_str);

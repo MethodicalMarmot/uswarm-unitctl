@@ -56,7 +56,7 @@ impl Context {
             sensors: SensorValues {
                 ping: RwLock::new(None),
                 lte: RwLock::new(None),
-                cpu_temp: RwLock::new(None),
+                system: RwLock::new(None),
             },
             modem: RwLock::new(None),
         })
@@ -118,7 +118,7 @@ impl Context {
 mod tests {
     use super::*;
     use crate::config::tests::test_config;
-    use crate::messages::telemetry::{CpuTempTelemetry, PingTelemetry};
+    use crate::messages::telemetry::PingTelemetry;
     use crate::sensors::lte::{LteReading, LteSignalQuality};
     use mavlink::ardupilotmega::*;
     use mavlink::MavHeader;
@@ -247,7 +247,7 @@ mod tests {
         let ctx = Context::new(test_config());
         assert!(ctx.sensors.ping.read().await.is_none());
         assert!(ctx.sensors.lte.read().await.is_none());
-        assert!(ctx.sensors.cpu_temp.read().await.is_none());
+        assert!(ctx.sensors.system.read().await.is_none());
     }
 
     #[tokio::test]
@@ -273,6 +273,7 @@ mod tests {
         let ctx = Context::new(test_config());
 
         let reading = LteReading {
+            imsi: "310260123456789".to_string(),
             signal: LteSignalQuality {
                 rsrq: -10,
                 rsrp: -85,
@@ -288,22 +289,25 @@ mod tests {
 
         let stored = ctx.sensors.lte.read().await;
         let stored = stored.as_ref().unwrap();
+        assert_eq!(stored.imsi, "310260123456789");
         assert_eq!(stored.signal.rsrp, -85);
         assert_eq!(stored.signal.pcid, 42);
     }
 
     #[tokio::test]
-    async fn test_sensor_values_cpu_temp_write_read() {
+    async fn test_sensor_values_system_write_read() {
+        use crate::messages::telemetry::SystemTelemetry;
         let ctx = Context::new(test_config());
-
-        let reading = CpuTempTelemetry {
-            temperature_c: 42.5,
+        let reading = SystemTelemetry {
+            cpu_usage_percent: 7.5,
+            uptime_s: 999,
+            ..SystemTelemetry::default()
         };
-        *ctx.sensors.cpu_temp.write().await = Some(reading);
-
-        let stored = ctx.sensors.cpu_temp.read().await;
+        *ctx.sensors.system.write().await = Some(reading);
+        let stored = ctx.sensors.system.read().await;
         let stored = stored.as_ref().unwrap();
-        assert_eq!(stored.temperature_c, 42.5);
+        assert_eq!(stored.uptime_s, 999);
+        assert!((stored.cpu_usage_percent - 7.5).abs() < f32::EPSILON);
     }
 
     // -- Modem access tests --

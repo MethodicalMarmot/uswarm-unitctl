@@ -17,7 +17,7 @@ pub struct TelemetryEnvelope {
 pub enum TelemetryData {
     Ping(PingTelemetry),
     Lte(LteTelemetry),
-    CpuTemp(CpuTempTelemetry),
+    System(SystemTelemetry),
 }
 
 /// ICMP ping telemetry.
@@ -41,6 +41,7 @@ impl Default for PingTelemetry {
 /// LTE serving-cell signal quality and neighbor cells.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LteTelemetry {
+    pub imsi: String,
     pub signal: LteSignalQuality,
     pub neighbors: Vec<LteNeighborCell>,
 }
@@ -48,6 +49,7 @@ pub struct LteTelemetry {
 impl From<&LteReading> for LteTelemetry {
     fn from(value: &LteReading) -> LteTelemetry {
         LteTelemetry {
+            imsi: value.imsi.clone(),
             signal: value.signal.clone(),
             neighbors: value.neighbors.values().cloned().collect(),
         }
@@ -83,10 +85,65 @@ pub struct LteSignalQuality {
     pub pcid: i32,
 }
 
-/// CPU temperature telemetry.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CpuTempTelemetry {
-    pub temperature_c: f64,
+/// Aggregate host telemetry: CPU temp/usage, memory, disks, load, uptime,
+/// network interfaces (with bandwidth + addresses), and connected cameras.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SystemTelemetry {
+    /// CPU temperature in degrees Celsius. `None` if the sysfs read failed.
+    pub cpu_temperature_c: Option<f64>,
+    /// Aggregate CPU usage across all cores, 0..100.
+    pub cpu_usage_percent: f32,
+    pub ram: RamUsage,
+    pub disks: Vec<DiskUsage>,
+    pub load_avg: LoadAverage,
+    pub uptime_s: u64,
+    pub network_interfaces: Vec<NetworkInterfaceTelemetry>,
+    pub cameras: Vec<CameraInfo>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RamUsage {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DiskUsage {
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct LoadAverage {
+    pub one: f64,
+    pub five: f64,
+    pub fifteen: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct NetworkInterfaceTelemetry {
+    pub name: String,
+    pub ipv4: Vec<String>,
+    /// Bits per second since the previous sensor tick.
+    pub rx_bps: u64,
+    pub tx_bps: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CameraInfo {
+    pub device: String,
+    pub name: Option<String>,
+    pub driver: Option<String>,
+    pub formats: Vec<CameraFormat>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CameraFormat {
+    pub fourcc: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[cfg(test)]
@@ -126,6 +183,7 @@ mod tests {
         let msg = TelemetryEnvelope {
             ts: sample_ts(),
             data: TelemetryData::Lte(LteTelemetry {
+                imsi: "310260123456789".to_string(),
                 signal: LteSignalQuality {
                     rsrp: -85,
                     rsrq: -10,
@@ -155,24 +213,6 @@ mod tests {
                 assert_eq!(lte.neighbors[0].pcid, 43);
             }
             _ => panic!("expected Lte"),
-        }
-    }
-
-    #[test]
-    fn round_trip_cpu_temp_telemetry() {
-        let msg = TelemetryEnvelope {
-            ts: sample_ts(),
-            data: TelemetryData::CpuTemp(CpuTempTelemetry {
-                temperature_c: 42.5,
-            }),
-        };
-        let json = serde_json::to_string(&msg).unwrap();
-        let parsed: TelemetryEnvelope = serde_json::from_str(&json).unwrap();
-        match parsed.data {
-            TelemetryData::CpuTemp(c) => {
-                assert!((c.temperature_c - 42.5).abs() < f64::EPSILON);
-            }
-            _ => panic!("expected CpuTemp"),
         }
     }
 
@@ -222,6 +262,7 @@ mod tests {
             },
         );
         let reading = LteReading {
+            imsi: "310260123456789".to_string(),
             signal: LteSignalQuality {
                 rsrq: -10,
                 rsrp: -85,
@@ -234,6 +275,7 @@ mod tests {
             neighbors,
         };
         let telemetry = LteTelemetry::from(&reading);
+        assert_eq!(telemetry.imsi, "310260123456789");
         assert_eq!(telemetry.signal.rsrp, -85);
         assert_eq!(telemetry.signal.tx_power, 23);
         assert_eq!(telemetry.neighbors.len(), 2);
@@ -250,5 +292,78 @@ mod tests {
         let json = serde_json::to_string_pretty(&schema).unwrap();
         assert!(json.contains("TelemetryData"));
         assert!(json.contains("TelemetryEnvelope"));
+    }
+
+    #[test]
+    fn round_trip_system_telemetry() {
+        let msg = TelemetryEnvelope {
+            ts: sample_ts(),
+            data: TelemetryData::System(SystemTelemetry {
+                cpu_temperature_c: Some(42.5),
+                cpu_usage_percent: 17.25,
+                ram: RamUsage {
+                    total_bytes: 8_000_000_000,
+                    used_bytes: 3_000_000_000,
+                    available_bytes: 5_000_000_000,
+                },
+                disks: vec![DiskUsage {
+                    mount_point: "/".to_string(),
+                    total_bytes: 100_000_000_000,
+                    available_bytes: 60_000_000_000,
+                }],
+                load_avg: LoadAverage {
+                    one: 0.5,
+                    five: 0.7,
+                    fifteen: 0.9,
+                },
+                uptime_s: 12345,
+                network_interfaces: vec![NetworkInterfaceTelemetry {
+                    name: "eth0".to_string(),
+                    ipv4: vec!["10.0.0.1".to_string()],
+                    rx_bps: 1_000_000,
+                    tx_bps: 250_000,
+                }],
+                cameras: vec![CameraInfo {
+                    device: "/dev/video0".to_string(),
+                    name: Some("UVC Camera".to_string()),
+                    driver: Some("uvcvideo".to_string()),
+                    formats: vec![CameraFormat {
+                        fourcc: "YUYV".to_string(),
+                        width: 640,
+                        height: 480,
+                    }],
+                }],
+            }),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: TelemetryEnvelope = serde_json::from_str(&json).unwrap();
+        match parsed.data {
+            TelemetryData::System(s) => {
+                assert_eq!(s.cpu_temperature_c, Some(42.5));
+                assert!((s.cpu_usage_percent - 17.25).abs() < f32::EPSILON);
+                assert_eq!(s.ram.total_bytes, 8_000_000_000);
+                assert_eq!(s.disks.len(), 1);
+                assert_eq!(s.disks[0].mount_point, "/");
+                assert!((s.load_avg.one - 0.5).abs() < f64::EPSILON);
+                assert_eq!(s.uptime_s, 12345);
+                assert_eq!(s.network_interfaces.len(), 1);
+                assert_eq!(s.network_interfaces[0].name, "eth0");
+                assert_eq!(s.network_interfaces[0].rx_bps, 1_000_000);
+                assert_eq!(s.cameras.len(), 1);
+                assert_eq!(s.cameras[0].device, "/dev/video0");
+                assert_eq!(s.cameras[0].formats[0].fourcc, "YUYV");
+            }
+            _ => panic!("expected System"),
+        }
+    }
+
+    #[test]
+    fn system_envelope_has_type_tag() {
+        let msg = TelemetryEnvelope {
+            ts: sample_ts(),
+            data: TelemetryData::System(SystemTelemetry::default()),
+        };
+        let v: serde_json::Value = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v["data"]["type"], "System");
     }
 }

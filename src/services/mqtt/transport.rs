@@ -364,8 +364,8 @@ mod tests {
             "prod/nodes/drone-42/telemetry/ping"
         );
         assert_eq!(
-            transport.telemetry_topic("cpu_temp"),
-            "prod/nodes/drone-42/telemetry/cpu_temp"
+            transport.telemetry_topic("system"),
+            "prod/nodes/drone-42/telemetry/system"
         );
     }
 

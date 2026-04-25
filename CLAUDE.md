@@ -37,7 +37,7 @@ make schema
 - Debug logging is enabled by either `--debug` CLI flag or `general.debug = true` in config
 - `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields. `self_sysid = 0` is the autodiscovery sentinel — the effective sysid is resolved at runtime via `Context::self_sysid()` as the minimum FC sysid in `Context.available_systems` (`self_sysid` uniqueness checks in `Config::validate()` are skipped in this mode; `gcs_sysid`/`sniffer_sysid`/`bs_sysid` uniqueness still applies).
 - `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type` (`rpi`, `usb`, `usb_yuy2`, `siyi`, `openipc`, or `fake` for simulation), `device`
-- `[sensors]` section configures three sensors (ping, lte, cpu_temp) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`). Ping sensor uses `general.interface` for binding. `[sensors.lte]` also requires `modem_type` (`"dbus"` for real ModemManager or `"fake"` for deterministic simulation) and `neighbor_expiry_s` (f64).
+- `[sensors]` section configures three sensors (ping, lte, system) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`, which defaults to 5s). Ping sensor uses `general.interface` for binding. `[sensors.lte]` also requires `modem_type` (`"dbus"` for real ModemManager or `"fake"` for deterministic simulation) and `neighbor_expiry_s` (f64). `[sensors.system]` only takes `enabled` and optional `interval_s`.
 - `[mqtt]` section configures MQTT communication with a central server: `enabled` (bool), `host`, `port` (8883 for TLS), `ca_cert_path`, `client_cert_path`, `client_key_path` (mutual TLS), `env_prefix` (topic namespace), `telemetry_interval_s`
 
 ## Architecture
@@ -65,7 +65,7 @@ Shared services that run as background tasks and are accessed through `Context`.
 Bidirectional MQTT communication with a central server. Split into transport (connection/TLS/reconnect/pub/sub) and command processing (lifecycle/routing/status). Enabled via `mqtt.enabled` config flag. Node ID is extracted from the client certificate CN field.
 
 - **MqttTransport** (`services/mqtt/transport.rs`) — Wraps rumqttc `AsyncClient` + `EventLoop` with mutual TLS. Handles connection, reconnection, publish/subscribe, and exposes a `broadcast::Sender<MqttEvent>` channel for incoming messages. Provides topic builder methods for telemetry, command, and status topics. Generates a 6-char hex session ID and configures an MQTT Last Will and Testament (LWT) with an offline `NodeStatusEnvelope` payload (retained, QoS 1) so the broker automatically publishes offline status when the connection drops.
-- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) — Implements `Task` trait. Periodically reads sensor values from `Context.sensors`, wraps them in `TelemetryEnvelope` (non-generic, with `TelemetryData` enum) from the messages module, and publishes JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|cpu_temp}`. Skips sensors with no reading.
+- **TelemetryPublisher** (`services/mqtt/telemetry.rs`) — Implements `Task` trait. Periodically reads sensor values from `Context.sensors`, wraps them in `TelemetryEnvelope` (non-generic, with `TelemetryData` enum) from the messages module, and publishes JSON to `{env_prefix}/nodes/{nodeId}/telemetry/{lte|ping|system}`. Skips sensors with no reading.
 - **CommandProcessor** (`services/mqtt/commands.rs`) — Subscribes to `{prefix}/nodes/{nodeId}/cmnd/+/in`, deserializes incoming commands into typed `CommandEnvelope` (non-generic, with `CommandPayload` enum) from the messages module, routes to registered `CommandHandler` implementations. Manages command lifecycle: TTL check → accepted → in_progress → completed/failed. Publishes status and result using `CommandResultMsg` (non-generic, with `CommandResultData` enum) to corresponding topics.
 - **TLS helpers** (`services/mqtt/tls.rs`) — `load_tls_config()` loads CA and client certificates for mutual TLS. `extract_node_id()` parses the client certificate and extracts the CN from the X.509 subject.
 - **StatusPublisher** (`services/mqtt/status.rs`) — Implements `Task` trait. Subscribes to `MqttEvent::Connected` broadcast and publishes a retained online `NodeStatusEnvelope` (with session ID, version, and resolved IPv4 from `general.interface`) to `{env_prefix}/nodes/{nodeId}/status` on each connect/reconnect. Resolves IP per-connect so published address reflects current state; on resolver failure logs a warning and publishes with `ip: None`. Works with the LWT set in `MqttTransport` for automatic offline detection.
@@ -79,7 +79,7 @@ Trait-based sensor framework. Each sensor implements `Sensor` trait (`name()` + 
 - **SensorManager** (`sensors/mod.rs`) — builds list of enabled sensors from config, spawns each as tokio task with CancellationToken. Also defines `SensorValues` struct.
 - **PingSensor** (`sensors/ping.rs`) — spawns `ping` subprocess with `-I <interface>` (from `general.interface`), sends SIGQUIT for stats, parses latency/loss. Uses `PingTelemetry` from messages module (aliased as `PingReading`).
 - **LteSensor** (`sensors/lte.rs`) — reads modem from Context (via `ModemAccessService`), AT command signal quality parsing, neighbor cell tracking. Uses `LteNeighborCell` from messages module. Defines `LteReading` (sensor-internal, HashMap-based) and `LteSignalQuality`.
-- **CpuTempSensor** (`sensors/cpu_temp.rs`) — reads sysfs thermal zone, converts millidegrees to degrees. Uses `CpuTempTelemetry` from messages module (aliased as `CpuTempReading`).
+- **SystemSensor** (`sensors/system.rs`) — gathers host-wide telemetry once per interval: CPU temperature (sysfs thermal zone), aggregate CPU usage and memory (via `sysinfo`), disks, load average, uptime, per-interface bandwidth (delta vs previous tick) joined with IPv4 addresses from `nix::ifaddrs`, and connected cameras enumerated/probed via the `v4l` crate. Stores the result in `Context.sensors.system`. Uses `SystemTelemetry` from the messages module.
 
 ### Env File Writers (`env/`)
 
@@ -123,13 +123,14 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `FakeModemAccess` — deterministic ModemAccess implementation for simulation; monotonic counter drives drifting LTE signal values (defined in `services/modem_access/fake.rs`)
 - `NetworkRegistration` — network registration status enum (defined in `services/modem_access/mod.rs`)
 - `Context` — shared state with channels, system discovery, sensor values, and modem access. `self_sysid()` async method resolves the effective MAVLink self sysid (configured value if non-zero, else min of `available_systems`).
-- `SensorValues` — RwLock-wrapped optional readings for ping, LTE, and CPU temperature (defined in `sensors/mod.rs`)
+- `SensorValues` — RwLock-wrapped optional readings for ping, LTE, and system telemetry (defined in `sensors/mod.rs`)
 - `PingTelemetry` — reachable, latency_ms, loss_percent (defined in `messages/telemetry.rs`; aliased as `PingReading` in `sensors/ping.rs`)
 - `LteTelemetry` — signal quality fields and neighbor cells (defined in `messages/telemetry.rs`)
 - `LteNeighborCell` — neighbor cell data: pcid, rsrp, rsrq, rssi, rssnr, earfcn, last_seen (defined in `messages/telemetry.rs`)
-- `CpuTempTelemetry` — temperature_c (defined in `messages/telemetry.rs`; aliased as `CpuTempReading` in `sensors/cpu_temp.rs`)
+- `SystemTelemetry` — host-wide snapshot: `cpu_temperature_c: Option<f64>`, `cpu_usage_percent: f32`, `ram: RamUsage`, `disks: Vec<DiskUsage>`, `load_avg: LoadAverage`, `uptime_s: u64`, `network_interfaces: Vec<NetworkInterfaceTelemetry>`, `cameras: Vec<CameraInfo>` (defined in `messages/telemetry.rs`)
+- `SystemSensorConfig` — `enabled` + optional `interval_s` (defined in `config.rs`)
 - `TelemetryEnvelope` — non-generic envelope: `ts` timestamp + `data: TelemetryData` enum (defined in `messages/telemetry.rs`)
-- `TelemetryData` — `#[serde(tag = "type")]` enum: Ping, Lte, CpuTemp variants (defined in `messages/telemetry.rs`)
+- `TelemetryData` — `#[serde(tag = "type")]` enum: Ping, Lte, System variants (defined in `messages/telemetry.rs`)
 - `Task` trait — component interface (`run() -> Vec<JoinHandle>`) defined in `main.rs`
 - `Sensor` trait — async sensor interface (name + run)
 - `SensorManager` — spawns enabled sensors as tokio tasks

@@ -110,7 +110,37 @@
               "type": "string"
             }
           }
+        },
+        {
+          "description": "Payload for `restart`.",
+          "type": "object",
+          "required": [
+            "target",
+            "type"
+          ],
+          "properties": {
+            "target": {
+              "$ref": "#/definitions/RestartTarget"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Restart"
+              ]
+            }
+          }
         }
+      ]
+    },
+    "RestartTarget": {
+      "description": "Target unit/operation for a `restart` command.",
+      "type": "string",
+      "enum": [
+        "camera",
+        "mavlink",
+        "modem",
+        "unitctl",
+        "reboot"
       ]
     }
   }

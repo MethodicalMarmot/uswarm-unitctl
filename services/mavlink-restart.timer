@@ -1,0 +1,10 @@
+[Unit]
+Description=Restart mavlink once after 30s
+
+[Timer]
+OnBootSec=30s
+AccuracySec=1s
+Unit=mavlink-restart.service
+
+[Install]
+WantedBy=timers.target

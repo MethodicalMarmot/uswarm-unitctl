@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart mavlink on ENV changes
+After=network.target
+StartLimitIntervalSec=10
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart mavlink
+
+[Install]
+WantedBy=multi-user.target

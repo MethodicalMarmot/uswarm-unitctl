@@ -9,6 +9,7 @@ use crate::messages::commands::{
 use crate::services::mqtt::handlers::config_update::ConfigUpdateHandler;
 use crate::services::mqtt::handlers::get_config::GetConfigHandler;
 use crate::services::mqtt::handlers::modem_commands::ModemCommandsHandler;
+use crate::services::mqtt::handlers::restart::{RestartHandler, TokioCommandRunner};
 use crate::services::mqtt::handlers::update_request::UpdateRequestHandler;
 use crate::Task;
 use async_trait::async_trait;
@@ -126,6 +127,13 @@ impl CommandProcessor {
             ModemCommandsHandler::NAME,
             ModemCommandsHandler::new(Arc::clone(ctx)),
         );
+        self.register(
+            RestartHandler::NAME,
+            RestartHandler::new(
+                Arc::new(TokioCommandRunner),
+                std::path::PathBuf::from(&ctx.config.general.env_dir),
+            ),
+        );
     }
 
     /// Register a handler for a command name.
@@ -203,6 +211,7 @@ impl CommandProcessor {
                 event = bridge_rx.recv() => {
                     match event {
                         Some(MqttEvent::Message { topic, payload }) => {
+                            debug!(topic = %topic, "CommandProcessor received message");
                             if let Some(cmd_name) = Self::extract_command_name(&topic, &command_suffix) {
                                 self.process_command(&cmd_name, &payload).await;
                             }
@@ -227,11 +236,13 @@ impl CommandProcessor {
     /// Extract command name from topic like `{prefix}/nodes/{id}/cmnd/{name}/in`.
     fn extract_command_name(topic: &str, prefix: &str) -> Option<String> {
         if !topic.starts_with(prefix) || !topic.ends_with("/in") {
+            warn!(topic = %topic, "Received message on topic that does not match command pattern");
             return None;
         }
         let remainder = &topic[prefix.len()..];
         let name = remainder.strip_suffix("/in")?;
         if name.is_empty() || name.contains('/') || name.contains('+') || name.contains('#') {
+            warn!("Invalid command name in topic {topic}");
             return None;
         }
         Some(name.to_string())
@@ -289,20 +300,30 @@ impl CommandProcessor {
         self.publish_status(cmd_name, uuid, CommandState::InProgress)
             .await;
 
-        // Execute handler
-        match handler.handle(&envelope).await {
-            Ok(result) => {
-                self.publish_status(cmd_name, uuid, CommandState::Completed)
-                    .await;
-                self.publish_result(cmd_name, uuid, true, None, Some(result.data))
-                    .await;
+        // Execute handler. The handler future is awaited inside a select against
+        // the shutdown token so that long-parking handlers (e.g. restart{unitctl}
+        // which awaits pending() until systemd terminates the process) do not
+        // wedge the CommandProcessor task and block process exit on SIGTERM.
+        tokio::select! {
+            _ = self.cancel.cancelled() => {
+                info!(command = cmd_name, uuid = %uuid, "CommandProcessor cancelled during handler execution");
             }
-            Err(e) => {
-                warn!(command = cmd_name, uuid = %uuid, error = %e, "Command failed");
-                self.publish_status(cmd_name, uuid, CommandState::Failed)
-                    .await;
-                self.publish_result(cmd_name, uuid, false, Some(e.message), None)
-                    .await;
+            res = handler.handle(&envelope) => {
+                match res {
+                    Ok(result) => {
+                        self.publish_status(cmd_name, uuid, CommandState::Completed)
+                            .await;
+                        self.publish_result(cmd_name, uuid, true, None, Some(result.data))
+                            .await;
+                    }
+                    Err(e) => {
+                        warn!(command = cmd_name, uuid = %uuid, error = %e, "Command failed");
+                        self.publish_status(cmd_name, uuid, CommandState::Failed)
+                            .await;
+                        self.publish_result(cmd_name, uuid, false, Some(e.message), None)
+                            .await;
+                    }
+                }
             }
         }
     }

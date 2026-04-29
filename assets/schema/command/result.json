@@ -188,6 +188,25 @@
               "type": "string"
             }
           }
+        },
+        {
+          "description": "Result for `restart`. `ok` and `error` live on `CommandResultMsg`.",
+          "type": "object",
+          "required": [
+            "target",
+            "type"
+          ],
+          "properties": {
+            "target": {
+              "$ref": "#/definitions/RestartTarget"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Restart"
+              ]
+            }
+          }
         }
       ]
     },
@@ -212,11 +231,15 @@
       "type": "object",
       "required": [
         "debug",
+        "env_dir",
         "interface"
       ],
       "properties": {
         "debug": {
           "type": "boolean"
+        },
+        "env_dir": {
+          "type": "string"
         },
         "interface": {
           "type": "string"
@@ -352,6 +375,17 @@
           "format": "double"
         }
       }
+    },
+    "RestartTarget": {
+      "description": "Target unit/operation for a `restart` command.",
+      "type": "string",
+      "enum": [
+        "camera",
+        "mavlink",
+        "modem",
+        "unitctl",
+        "reboot"
+      ]
     },
     "SafeConfig": {
       "description": "A sanitized view of the full `Config`, safe for MQTT exposure. TLS certificate paths are replaced with `\"***\"`.",

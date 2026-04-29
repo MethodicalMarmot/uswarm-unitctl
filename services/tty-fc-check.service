@@ -1,0 +1,11 @@
+[Unit]
+Description=Check USB device paths and reset 1a86:7523 devices if needed
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/unitctl/scripts/reset-serial-device.sh 1a86:7523
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

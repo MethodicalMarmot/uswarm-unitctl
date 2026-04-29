@@ -63,8 +63,8 @@ install() {
     maybe_start unitctl-watcher.path
   }
 
+  systemctl-exists modem-restart.service || systemctl link ./services/modem-restart.service
   if [ "$SKIP_DEVICE_WATCHDOG" = false ]; then
-    systemctl-exists modem-restart.service || systemctl link ./services/modem-restart.service
     systemctl-exists modem-restart.timer || {
       systemctl link ./services/modem-restart.timer
       systemctl enable ./services/modem-restart.timer

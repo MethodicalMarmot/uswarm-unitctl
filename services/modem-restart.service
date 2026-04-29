@@ -1,0 +1,7 @@
+[Unit]
+Description=Run the "reset-modem" script
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -c '/opt/unitctl/scripts/modem-restart.sh wwan0'

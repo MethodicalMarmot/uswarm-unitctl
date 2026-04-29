@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart mavlink on ENV changes
+StartLimitIntervalSec=0
+
+[Path]
+PathModified=/etc/mavlink.env
+
+[Install]
+WantedBy=multi-user.target

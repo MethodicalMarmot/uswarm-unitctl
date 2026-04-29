@@ -7,6 +7,7 @@ use unitctl::mavlink::telemetry_reporter::TelemetryReporter;
 use unitctl::sensors::SensorManager;
 use unitctl::services::modem_access::ModemAccessService;
 use unitctl::services::mqtt::commands::CommandProcessor;
+use unitctl::services::mqtt::handlers::restart::RestartCompletionPublisher;
 use unitctl::services::mqtt::status::StatusPublisher;
 use unitctl::services::mqtt::telemetry::TelemetryPublisher;
 use unitctl::services::mqtt::transport::MqttTransport;
@@ -165,6 +166,18 @@ async fn main() {
                     ctx.config.general.interface.clone(),
                 ));
                 handles.extend(status_publisher.run());
+
+                // Create restart completion publisher BEFORE transport.run() so
+                // its broadcast receiver is registered before the first ConnAck;
+                // otherwise the deferred Completed publish for a self-restart
+                // can be silently dropped when MQTT connects in the gap between
+                // transport.run() and this constructor.
+                let restart_completion = Arc::new(RestartCompletionPublisher::new(
+                    Arc::clone(&transport),
+                    std::path::PathBuf::from(&ctx.config.general.env_dir),
+                    cancel.clone(),
+                ));
+                handles.extend(restart_completion.run());
 
                 // Run transport after all subscribers have been registered
                 handles.extend(Arc::clone(&transport).run());

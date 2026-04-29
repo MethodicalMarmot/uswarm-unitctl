@@ -6,6 +6,7 @@ StartLimitIntervalSec=0
 Type=simple
 StandardOutput=journal
 StandardError=journal
+PassEnvironment=RUST_LOG
 ExecStart=/usr/local/bin/unitctl --config /etc/unitctl/config.toml
 TimeoutStartSec=30s
 Restart=on-failure

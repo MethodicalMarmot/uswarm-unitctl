@@ -1,0 +1,6 @@
+[Unit]
+Description=One-time restart of mavlink
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart mavlink.service

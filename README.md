@@ -389,3 +389,21 @@ Tests cover config parsing, custom command encoding/decoding, channel behavior, 
 ```bash
 make lint
 ```
+
+## Roadmap
+[x] install script: services and config watchers
+[x] Add IMSI as a LteTelemetry telemetry field for the mqtt message and fill it with the response of "AT+CIMI" command. do not forget "fake" modem 
+[x] System telemetry
+
+[ ] mqtt commands processing
+* [ ] get_config
+* [ ] config_update
+* [ ] update_request
+* [x] modem_commands
+  * [ ] at-command execution locking, no parallel commands 
+* [x] restart
+[ ] journalctl and dmesg logs
+[ ] process mavlink commands: VIDEO_QUALITY, SWITCH_CAMERA, GPS_MANAGER
+[ ] Camera service integration
+[ ] packaging and deployment
+[ ] sync time with mqtt message from fe

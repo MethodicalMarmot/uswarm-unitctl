@@ -274,7 +274,7 @@ impl MqttTransport {
     /// Returns `{env_prefix}/nodes/{node_id}/cmnd/{cmd}/{suffix}`
     pub fn command_topic(&self, cmd: &str, suffix: &str) -> String {
         if cmd.is_empty() && suffix.is_empty() {
-            format!("{}/nodes/{}/cmnd", self.env_prefix, self.node_id)
+            format!("{}/nodes/{}/cmnd/", self.env_prefix, self.node_id)
         } else if suffix.is_empty() {
             format!("{}/nodes/{}/cmnd/{}", self.env_prefix, self.node_id, cmd)
         } else {

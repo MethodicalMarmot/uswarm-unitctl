@@ -45,6 +45,7 @@ pub struct Config {
 pub struct GeneralConfig {
     pub debug: bool,
     pub interface: String,
+    pub env_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -385,6 +386,18 @@ impl Config {
             ));
         }
 
+        // Validate general.env_dir
+        if self.general.env_dir.is_empty() {
+            return Err(ConfigError::Validation(
+                "general.env_dir must not be empty".to_string(),
+            ));
+        }
+        if self.general.env_dir.contains('\n') || self.general.env_dir.contains('\r') {
+            return Err(ConfigError::Validation(
+                "general.env_dir must not contain newline characters".to_string(),
+            ));
+        }
+
         // Validate sensor intervals (must be finite and positive; TOML allows inf/nan)
         if !self.sensors.default_interval_s.is_finite() || self.sensors.default_interval_s <= 0.0 {
             return Err(ConfigError::Validation(
@@ -481,6 +494,7 @@ pub mod tests {
 [general]
 debug = false
 interface = "eth0"
+env_dir = "/var/run/unitctl"
 
 [mavlink]
 protocol = "tcpout"
@@ -549,6 +563,7 @@ telemetry_interval_s = 1.0
 [general]
 debug = true
 interface = "eth0"
+env_dir = "/run/unitctl-alt"
 
 [mavlink]
 protocol = "tcpout"
@@ -608,6 +623,7 @@ telemetry_interval_s = 1.0
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.general.debug);
+        assert_eq!(config.general.env_dir, "/run/unitctl-alt");
         assert_eq!(config.mavlink.protocol, "tcpout");
         assert_eq!(config.mavlink.host, "192.168.1.100");
         assert_eq!(config.mavlink.local_mavlink_port, 5761);
@@ -640,6 +656,7 @@ telemetry_interval_s = 1.0
         let config = test_config();
         assert!(!config.general.debug);
         assert_eq!(config.general.interface, "eth0");
+        assert_eq!(config.general.env_dir, "/var/run/unitctl");
         assert_eq!(config.mavlink.protocol, "tcpout");
         assert_eq!(config.mavlink.host, "127.0.0.1");
         assert_eq!(config.mavlink.local_mavlink_port, 5760);
@@ -894,6 +911,7 @@ enabled = true
 [general]
 debug = false
 interface = "eth0"
+env_dir = "/var/run/unitctl"
 
 [mavlink]
 protocol = "tcpout"
@@ -1117,6 +1135,24 @@ telemetry_interval_s = 1.0
         let config = test_config();
         assert_eq!(config.general.interface, "eth0");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_env_dir() {
+        let mut cfg = test_config();
+        cfg.general.env_dir = String::new();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("general.env_dir"));
+    }
+
+    #[test]
+    fn test_validate_rejects_newline_env_dir() {
+        let mut cfg = test_config();
+        cfg.general.env_dir = "/var/run/unitctl\nEVIL=1".to_string();
+        let err = cfg.validate().unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("general.env_dir"));
     }
 
     #[test]

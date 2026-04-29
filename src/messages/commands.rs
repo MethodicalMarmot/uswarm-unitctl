@@ -101,6 +101,7 @@ pub enum CommandPayload {
     ConfigUpdate(ConfigUpdatePayload),
     ModemCommands(ModemCommandPayload),
     UpdateRequest(UpdateRequestPayload),
+    Restart(RestartPayload),
 }
 
 /// Status update published on `.../cmnd/{name}/status`.
@@ -144,6 +145,7 @@ pub enum CommandResultData {
     ConfigUpdate(ConfigUpdateResult),
     ModemCommands(ModemCommandResult),
     UpdateRequest(UpdateRequestResult),
+    Restart(RestartResult),
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +201,29 @@ pub struct ModemCommandPayload {
 pub struct ModemCommandResult {
     pub command: String,
     pub response: String,
+}
+
+/// Target unit/operation for a `restart` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RestartTarget {
+    Camera,
+    Mavlink,
+    Modem,
+    Unitctl,
+    Reboot,
+}
+
+/// Payload for `restart`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RestartPayload {
+    pub target: RestartTarget,
+}
+
+/// Result for `restart`. `ok` and `error` live on `CommandResultMsg`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RestartResult {
+    pub target: RestartTarget,
 }
 
 #[cfg(test)]
@@ -539,5 +564,74 @@ mod tests {
         let schema = schemars::schema_for!(CommandResultMsg);
         let json = serde_json::to_string_pretty(&schema).unwrap();
         assert!(json.contains("CommandResultData"));
+
+        let schema = schemars::schema_for!(RestartPayload);
+        let json = serde_json::to_string_pretty(&schema).unwrap();
+        assert!(json.contains("RestartTarget"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Restart command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn round_trip_restart_payload_each_target() {
+        for target in [
+            RestartTarget::Camera,
+            RestartTarget::Mavlink,
+            RestartTarget::Modem,
+            RestartTarget::Unitctl,
+            RestartTarget::Reboot,
+        ] {
+            let payload = RestartPayload { target };
+            let json = serde_json::to_string(&payload).unwrap();
+            let parsed: RestartPayload = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.target, target);
+        }
+    }
+
+    #[test]
+    fn restart_target_serializes_snake_case() {
+        let json = serde_json::to_value(RestartTarget::Unitctl).unwrap();
+        assert_eq!(json, "unitctl");
+        let parsed: RestartTarget = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, RestartTarget::Unitctl);
+    }
+
+    #[test]
+    fn round_trip_command_envelope_restart() {
+        let env = CommandEnvelope {
+            uuid: "restart-1".to_string(),
+            issued_at: sample_ts(),
+            ttl_sec: 60,
+            payload: CommandPayload::Restart(RestartPayload {
+                target: RestartTarget::Camera,
+            }),
+        };
+        let json = serde_json::to_string(&env).unwrap();
+        let parsed: CommandEnvelope = serde_json::from_str(&json).unwrap();
+        match parsed.payload {
+            CommandPayload::Restart(ref p) => assert_eq!(p.target, RestartTarget::Camera),
+            _ => panic!("expected Restart payload"),
+        }
+    }
+
+    #[test]
+    fn round_trip_command_result_restart() {
+        let result = CommandResultMsg {
+            uuid: "rr-1".to_string(),
+            ok: true,
+            ts: sample_ts(),
+            error: None,
+            data: Some(CommandResultData::Restart(RestartResult {
+                target: RestartTarget::Reboot,
+            })),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: CommandResultMsg = serde_json::from_str(&json).unwrap();
+        match parsed.data.unwrap() {
+            CommandResultData::Restart(r) => assert_eq!(r.target, RestartTarget::Reboot),
+            _ => panic!("expected Restart"),
+        }
     }
 }

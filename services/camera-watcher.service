@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart camera on ENV changes
+After=network.target
+StartLimitIntervalSec=10
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart camera
+
+[Install]
+WantedBy=multi-user.target

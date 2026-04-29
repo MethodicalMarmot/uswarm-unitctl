@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart camera on ENV changes
+StartLimitIntervalSec=0
+
+[Path]
+PathModified=/etc/camera.env
+
+[Install]
+WantedBy=multi-user.target

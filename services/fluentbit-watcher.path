@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart fluentbit on config changes
+StartLimitIntervalSec=0
+
+[Path]
+PathModified=/etc/fluent-bit.conf
+
+[Install]
+WantedBy=multi-user.target

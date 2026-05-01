@@ -1,0 +1,19 @@
+[Unit]
+Description=Fluent Bit log forwarder
+After=unitctl.service network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=exec
+TimeoutStartSec=30s
+ExecStartPre=/bin/sh -c 'until [ -f /etc/fluent-bit.conf ]; do sleep 0.1; done'
+ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit.conf
+Restart=on-failure
+RestartSec=1s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

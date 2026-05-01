@@ -1453,7 +1453,7 @@ git commit -m "feat(main): spawn FluentbitEnvWriter at startup"
 - Create: `services/fluentbit-watcher.path`
 - Create: `services/fluentbit-watcher.service`
 
-- [ ] **Step 1: Create `services/fluentbit.service`**
+- [x] **Step 1: Create `services/fluentbit.service`**
 
 ```ini
 [Unit]
@@ -1477,7 +1477,7 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 2: Create `services/fluentbit-watcher.path`**
+- [x] **Step 2: Create `services/fluentbit-watcher.path`**
 
 ```ini
 [Unit]
@@ -1491,7 +1491,7 @@ PathModified=/etc/fluent-bit.conf
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 3: Create `services/fluentbit-watcher.service`**
+- [x] **Step 3: Create `services/fluentbit-watcher.service`**
 
 ```ini
 [Unit]
@@ -1508,7 +1508,7 @@ ExecStart=/usr/bin/systemctl restart fluentbit
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 4: Verify file shapes**
+- [x] **Step 4: Verify file shapes** (systemd-analyze unavailable in build env — files visually match plan)
 
 ```bash
 ls -la services/fluentbit*
@@ -1516,7 +1516,7 @@ systemd-analyze verify services/fluentbit.service services/fluentbit-watcher.ser
 ```
 (`systemd-analyze verify` may emit warnings about absolute paths to linked binaries; ignore those.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add services/fluentbit.service services/fluentbit-watcher.path services/fluentbit-watcher.service

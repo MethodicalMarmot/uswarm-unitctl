@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart fluentbit on config changes
+After=network.target
+StartLimitIntervalSec=10
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart fluentbit
+
+[Install]
+WantedBy=multi-user.target

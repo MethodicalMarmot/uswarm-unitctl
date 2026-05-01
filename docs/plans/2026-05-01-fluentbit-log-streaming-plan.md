@@ -1675,47 +1675,35 @@ git commit -m "docs(config): document [fluentbit] section in config.toml.example
 **Files:**
 - (no edits — read-only verification)
 
-- [ ] **Step 1: Full test pass**
+- [x] **Step 1: Full test pass**
 
 ```bash
 cargo test --all-targets
 ```
-Expected: all PASS.
+Expected: all PASS. (Lib tests: 469 passed. The two `generate-schema` bin tests share output files and race when run with default parallelism; pass cleanly with `--test-threads=1`. Pre-existing test design, unrelated to this plan.)
 
-- [ ] **Step 2: Clippy clean**
+- [x] **Step 2: Clippy clean**
 
 ```bash
 cargo clippy --all-targets -- -D warnings
 ```
 Expected: no warnings.
 
-- [ ] **Step 3: Format check**
+- [x] **Step 3: Format check**
 
 ```bash
 cargo fmt --check
 ```
-Expected: no diffs.
+Expected: no diffs. (Initial run reported one diff in `src/env/fluentbit_env.rs`; fixed via `cargo fmt`.)
 
-- [ ] **Step 4: Schema regeneration**
+- [x] **Step 4: Schema regeneration**
 
 ```bash
 cargo run --bin generate-schema
 ```
-Inspect `assets/schema/` for the new `FluentbitConfig` schema; if the diff is large but expected, commit it:
+Diff confirms only `assets/schema/command/result.json` changed: a new `FluentbitConfig` definition + `SafeConfig.fluentbit` ref — exactly the expected delta from this plan. Committed.
 
-```bash
-git add assets/schema/
-git diff --cached --stat
-git commit -m "chore(schema): regenerate JSON schemas after [fluentbit] addition"
-```
-
-- [ ] **Step 5: Spot-check the install script in a container** (optional, recommended before merging)
-
-```bash
-docker run --rm -it -v "$PWD":/work debian:bookworm-slim bash -c \
-  "apt-get update && apt-get install -y --no-install-recommends rsync sudo && cd /work && bash -n scripts/install.sh"
-```
-Expected: exit 0.
+- [x] **Step 5: Spot-check the install script in a container** (skipped — not automatable in this environment; `bash -n scripts/install.sh` was already run cleanly in Task 10)
 
 ---
 

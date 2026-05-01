@@ -288,7 +288,10 @@ mod tests {
         for h in writer.run() {
             h.await.unwrap();
         }
-        assert!(!path.exists(), "no file should be written when cert missing");
+        assert!(
+            !path.exists(),
+            "no file should be written when cert missing"
+        );
     }
 
     #[tokio::test]

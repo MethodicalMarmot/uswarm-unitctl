@@ -227,6 +227,49 @@
         }
       }
     },
+    "FluentbitConfig": {
+      "type": "object",
+      "required": [
+        "config_path",
+        "enabled",
+        "host",
+        "port",
+        "tls",
+        "tls_verify"
+      ],
+      "properties": {
+        "config_path": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "systemd_filter": {
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tls": {
+          "type": "boolean"
+        },
+        "tls_verify": {
+          "type": "boolean"
+        }
+      }
+    },
     "LteSensorConfig": {
       "type": "object",
       "required": [
@@ -373,6 +416,7 @@
       "type": "object",
       "required": [
         "camera",
+        "fluentbit",
         "general",
         "mavlink",
         "mqtt",
@@ -381,6 +425,9 @@
       "properties": {
         "camera": {
           "$ref": "#/definitions/CameraConfig"
+        },
+        "fluentbit": {
+          "$ref": "#/definitions/FluentbitConfig"
         },
         "general": {
           "$ref": "#/definitions/SafeGeneralConfig"

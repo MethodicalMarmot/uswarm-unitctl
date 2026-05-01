@@ -1247,7 +1247,7 @@ git commit -m "feat(env): generate_fluentbit_config helper + module skeleton"
 
 Replaces the placeholder body with the real writer: skip when disabled, render via `generate_fluentbit_config`, write atomically (write to a temp file, then rename) into `config_path`.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
 Append to `mod tests` in `src/env/fluentbit_env.rs`:
 
@@ -1322,14 +1322,14 @@ Append to `mod tests` in `src/env/fluentbit_env.rs`:
     }
 ```
 
-- [ ] **Step 2: Run failing tests**
+- [x] **Step 2: Run failing tests**
 
 ```bash
 cargo test --lib env::fluentbit_env::tests::test_writer 2>&1 | tail -20
 ```
 Expected: failures (no file written / panic).
 
-- [ ] **Step 3: Replace the stub `Task::run` with the real implementation**
+- [x] **Step 3: Replace the stub `Task::run` with the real implementation**
 
 In `src/env/fluentbit_env.rs`, replace the `impl Task for FluentbitEnvWriter` block plus the two stub functions (`fn error<T>()` and `fn info<T>()`) with:
 
@@ -1382,21 +1382,21 @@ impl Task for FluentbitEnvWriter {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 ```bash
 cargo test --lib env::fluentbit_env
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Lint**
+- [x] **Step 5: Lint**
 
 ```bash
 cargo clippy -- -D warnings
 ```
 Expected: no warnings.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/env/fluentbit_env.rs

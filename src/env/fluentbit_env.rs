@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::{error, info};
+
 use crate::config::Config;
 use crate::context::Context;
 use crate::Task;
@@ -88,9 +90,48 @@ impl FluentbitEnvWriter {
 
 impl Task for FluentbitEnvWriter {
     fn run(self: Arc<Self>) -> Vec<tokio::task::JoinHandle<()>> {
-        // Implementation in Task 7.
-        let _ = &self.ctx;
-        vec![]
+        let ctx = Arc::clone(&self.ctx);
+        let handle = tokio::spawn(async move {
+            let cfg = &ctx.config;
+            if !cfg.fluentbit.enabled {
+                info!("fluentbit disabled, skipping config write");
+                return;
+            }
+
+            let path = cfg.fluentbit.config_path.clone();
+
+            let content = match generate_fluentbit_config(cfg) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(error = %e, "failed to generate fluentbit config");
+                    return;
+                }
+            };
+
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        error!(path = %path, error = %e, "failed to create parent directory for fluentbit config");
+                        return;
+                    }
+                }
+            }
+
+            // Atomic write: write to a sibling tmp file, then rename.
+            let tmp_path = format!("{path}.tmp");
+            if let Err(e) = std::fs::write(&tmp_path, &content) {
+                error!(path = %tmp_path, error = %e, "failed to write fluentbit tmp file");
+                return;
+            }
+            match std::fs::rename(&tmp_path, &path) {
+                Ok(()) => info!(path = %path, "fluentbit config written"),
+                Err(e) => {
+                    error!(path = %path, error = %e, "failed to rename fluentbit tmp file");
+                    let _ = std::fs::remove_file(&tmp_path);
+                }
+            }
+        });
+        vec![handle]
     }
 }
 
@@ -195,5 +236,74 @@ mod tests {
                 assert_eq!(field, "general.client_cert_path");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_writer_writes_file_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fluent-bit.conf");
+
+        let mut cfg = enabled_config();
+        cfg.fluentbit.config_path = path.to_string_lossy().to_string();
+
+        let ctx = Context::new(cfg);
+        let writer = Arc::new(FluentbitEnvWriter::new(ctx));
+        for h in writer.run() {
+            h.await.unwrap();
+        }
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("- name: systemd"));
+        assert!(written.contains("- name: forward"));
+    }
+
+    #[tokio::test]
+    async fn test_writer_skips_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fluent-bit.conf");
+
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = false;
+        cfg.fluentbit.config_path = path.to_string_lossy().to_string();
+
+        let ctx = Context::new(cfg);
+        let writer = Arc::new(FluentbitEnvWriter::new(ctx));
+        for h in writer.run() {
+            h.await.unwrap();
+        }
+        assert!(!path.exists(), "no file should be written when disabled");
+    }
+
+    #[tokio::test]
+    async fn test_writer_skips_when_tls_required_but_cert_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fluent-bit.conf");
+
+        let mut cfg = enabled_config();
+        cfg.general.ca_cert_path = None;
+        cfg.fluentbit.config_path = path.to_string_lossy().to_string();
+
+        let ctx = Context::new(cfg);
+        let writer = Arc::new(FluentbitEnvWriter::new(ctx));
+        for h in writer.run() {
+            h.await.unwrap();
+        }
+        assert!(!path.exists(), "no file should be written when cert missing");
+    }
+
+    #[tokio::test]
+    async fn test_writer_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/a/b/fluent-bit.conf");
+
+        let mut cfg = enabled_config();
+        cfg.fluentbit.config_path = path.to_string_lossy().to_string();
+
+        let ctx = Context::new(cfg);
+        let writer = Arc::new(FluentbitEnvWriter::new(ctx));
+        for h in writer.run() {
+            h.await.unwrap();
+        }
+        assert!(path.exists());
     }
 }

@@ -25,8 +25,8 @@
 | `src/env/fluentbit_env.rs` | Create | `generate_fluentbit_config()` pure helper + `FluentbitEnvWriter` Task. |
 | `src/env/mod.rs` | Modify | `pub mod fluentbit_env; pub use fluentbit_env::FluentbitEnvWriter;` |
 | `src/main.rs` | Modify | Update `MqttTransport::new` call site (now takes `&ctx.config`); spawn `FluentbitEnvWriter`. |
-| `services/fluentbit.service` | Create | Runs `fluent-bit -c /etc/fluent-bit.conf`, waits for the file. |
-| `services/fluentbit-watcher.path` | Create | `PathModified=/etc/fluent-bit.conf`. |
+| `services/fluentbit.service` | Create | Runs `fluent-bit -c /etc/fluent-bit.yaml`, waits for the file. |
+| `services/fluentbit-watcher.path` | Create | `PathModified=/etc/fluent-bit.yaml`. |
 | `services/fluentbit-watcher.service` | Create | `oneshot` calling `systemctl restart fluentbit`. |
 | `scripts/install.sh` | Modify | Install `fluent-bit` apt package; link & enable fluentbit units; uninstall hook. |
 | `config.toml.example` | Modify | Move cert paths to `[general]`; new `[fluentbit]` section. |
@@ -617,7 +617,7 @@ fn test_fluentbit_config_parsed() {
     assert_eq!(config.fluentbit.port, 24224);
     assert!(config.fluentbit.tls);
     assert!(config.fluentbit.tls_verify);
-    assert_eq!(config.fluentbit.config_path, "/etc/fluent-bit.conf");
+    assert_eq!(config.fluentbit.config_path, "/etc/fluent-bit.yaml");
     assert!(config.fluentbit.systemd_filter.is_none());
 }
 
@@ -667,7 +667,7 @@ impl Default for FluentbitConfig {
             port: 24224,
             tls: true,
             tls_verify: true,
-            config_path: "/etc/fluent-bit.conf".to_string(),
+            config_path: "/etc/fluent-bit.yaml".to_string(),
             systemd_filter: None,
         }
     }
@@ -687,7 +687,7 @@ host = "logs.example.com"
 port = 24224
 tls = true
 tls_verify = true
-config_path = "/etc/fluent-bit.conf"
+config_path = "/etc/fluent-bit.yaml"
 # systemd_filter placeholder
 ```
 
@@ -1466,8 +1466,8 @@ StartLimitIntervalSec=60
 [Service]
 Type=exec
 TimeoutStartSec=30s
-ExecStartPre=/bin/sh -c 'until [ -f /etc/fluent-bit.conf ]; do sleep 0.1; done'
-ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit.conf
+ExecStartPre=/bin/sh -c 'until [ -f /etc/fluent-bit.yaml ]; do sleep 0.1; done'
+ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit.yaml
 Restart=on-failure
 RestartSec=1s
 StandardOutput=journal
@@ -1485,7 +1485,7 @@ Description=Restart fluentbit on config changes
 StartLimitIntervalSec=0
 
 [Path]
-PathModified=/etc/fluent-bit.conf
+PathModified=/etc/fluent-bit.yaml
 
 [Install]
 WantedBy=multi-user.target
@@ -1621,7 +1621,7 @@ Append to `config.toml.example`:
 
 # Fluent Bit log forwarder
 # When enabled, unitctl writes a Fluent Bit YAML config to `config_path` at
-# startup. The bundled `fluentbit.service` reads /etc/fluent-bit.conf, so set
+# startup. The bundled `fluentbit.service` reads /etc/fluent-bit.yaml, so set
 # `config_path` to that path unless you also override the systemd unit. When
 # `tls = true`, `general.{ca,client}_cert_path` and `general.client_key_path`
 # must all be set; otherwise the writer skips and an error is logged.
@@ -1631,7 +1631,7 @@ host = "logs.example.com"
 port = 24224
 tls = true
 tls_verify = true
-config_path = "/etc/fluent-bit.conf"
+config_path = "/etc/fluent-bit.yaml"
 # Optional list of journald field filters (KEY=VALUE), AND-ed by Fluent Bit.
 # systemd_filter = ["_SYSTEMD_UNIT=unitctl.service", "_SYSTEMD_UNIT=mavlink.service"]
 ```

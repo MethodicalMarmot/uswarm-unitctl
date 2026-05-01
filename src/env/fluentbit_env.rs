@@ -9,7 +9,7 @@ use crate::Task;
 /// Filesystem path the bundled `fluentbit.service` and `fluentbit-watcher.path`
 /// units are hard-wired to. `Config::validate()` rejects any other value for
 /// `fluentbit.config_path` to keep the writer and the units in sync.
-pub const FLUENTBIT_CONFIG_PATH: &str = "/etc/fluent-bit.conf";
+pub const FLUENTBIT_CONFIG_PATH: &str = "/etc/fluent-bit.yaml";
 
 /// Generate the Fluent Bit YAML config from `config`.
 ///
@@ -165,7 +165,7 @@ impl Task for FluentbitEnvWriter {
             }
 
             // We must write in place (not tmp+rename): the bundled
-            // `fluentbit-watcher.path` unit is `PathModified=/etc/fluent-bit.conf`,
+            // `fluentbit-watcher.path` unit is `PathModified=/etc/fluent-bit.yaml`,
             // an inotify watch on the file's inode. A rename swaps in a new
             // inode and leaves the watch on the orphaned old inode, so the
             // watcher would miss the change. A direct truncate-write produces

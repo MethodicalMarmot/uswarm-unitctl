@@ -152,7 +152,7 @@ impl Default for FluentbitConfig {
             port: 24224,
             tls: true,
             tls_verify: true,
-            config_path: "/etc/fluent-bit.conf".to_string(),
+            config_path: "/etc/fluent-bit.yaml".to_string(),
             systemd_filter: None,
         }
     }
@@ -570,7 +570,7 @@ impl Config {
                 ));
             }
             // The bundled fluentbit.service and fluentbit-watcher.path units
-            // hard-code /etc/fluent-bit.conf; any other value silently breaks
+            // hard-code /etc/fluent-bit.yaml; any other value silently breaks
             // them. Pin the path here until the units are templated.
             if f.config_path != crate::env::fluentbit_env::FLUENTBIT_CONFIG_PATH {
                 return Err(ConfigError::Validation(format!(
@@ -686,7 +686,7 @@ host = "logs.example.com"
 port = 24224
 tls = true
 tls_verify = true
-config_path = "/etc/fluent-bit.conf"
+config_path = "/etc/fluent-bit.yaml"
 # systemd_filter placeholder
 "#;
 
@@ -761,7 +761,7 @@ host = "logs.example.com"
 port = 24224
 tls = true
 tls_verify = true
-config_path = "/etc/fluent-bit.conf"
+config_path = "/etc/fluent-bit.yaml"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.general.debug);
@@ -1117,7 +1117,7 @@ host = "logs.example.com"
 port = 24224
 tls = true
 tls_verify = true
-config_path = "/etc/fluent-bit.conf"
+config_path = "/etc/fluent-bit.yaml"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
@@ -1775,7 +1775,7 @@ enabled = true
         assert_eq!(config.fluentbit.port, 24224);
         assert!(config.fluentbit.tls);
         assert!(config.fluentbit.tls_verify);
-        assert_eq!(config.fluentbit.config_path, "/etc/fluent-bit.conf");
+        assert_eq!(config.fluentbit.config_path, "/etc/fluent-bit.yaml");
         assert!(config.fluentbit.systemd_filter.is_none());
     }
 
@@ -1854,7 +1854,7 @@ enabled = true
         let err = cfg.validate().unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("fluentbit.config_path"));
-        assert!(msg.contains("/etc/fluent-bit.conf"));
+        assert!(msg.contains("/etc/fluent-bit.yaml"));
     }
 
     #[test]

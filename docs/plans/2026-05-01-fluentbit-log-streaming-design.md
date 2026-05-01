@@ -72,7 +72,7 @@ pub struct FluentbitConfig {
     pub port: u16,
     pub tls: bool,
     pub tls_verify: bool,
-    pub config_path: String,                 // e.g. /etc/fluent-bit.conf
+    pub config_path: String,                 // e.g. /etc/fluent-bit.yaml
     pub systemd_filter: Option<Vec<String>>, // each entry "KEY=VALUE"
 }
 ```
@@ -103,7 +103,7 @@ host = "logs.example.com"
 port = 24224
 tls = true
 tls_verify = true
-config_path = "/etc/fluent-bit.conf"
+config_path = "/etc/fluent-bit.yaml"
 # systemd_filter = ["_SYSTEMD_UNIT=unitctl.service", "_SYSTEMD_UNIT=mavlink.service"]
 ```
 
@@ -201,8 +201,8 @@ StartLimitIntervalSec=60
 [Service]
 Type=exec
 TimeoutStartSec=30s
-ExecStartPre=/bin/sh -c 'until [ -f /etc/fluent-bit.conf ]; do sleep 0.1; done'
-ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit.conf
+ExecStartPre=/bin/sh -c 'until [ -f /etc/fluent-bit.yaml ]; do sleep 0.1; done'
+ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit.yaml
 Restart=on-failure
 RestartSec=1s
 StandardOutput=journal
@@ -224,7 +224,7 @@ Description=Restart fluentbit on config changes
 StartLimitIntervalSec=0
 
 [Path]
-PathModified=/etc/fluent-bit.conf
+PathModified=/etc/fluent-bit.yaml
 
 [Install]
 WantedBy=multi-user.target

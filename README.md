@@ -272,7 +272,7 @@ host = "logs.example.com"   # Forward output destination
 port = 24224                 # Forward output port
 tls = true                   # Use mutual TLS (requires general.*_cert_path)
 tls_verify = true            # Verify the server certificate
-config_path = "/etc/fluent-bit.conf"  # Output path for the generated YAML
+config_path = "/etc/fluent-bit.yaml"  # Output path for the generated YAML
 # systemd_filter = ["_SYSTEMD_UNIT=unitctl.service"]  # Optional journald filters
 ```
 

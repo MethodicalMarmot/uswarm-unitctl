@@ -604,7 +604,7 @@ git commit -m "refactor(config): move TLS cert paths from [mqtt] to [general]"
 
 Adds the new section, field-by-field. Pure data + parse tests; no validation logic yet.
 
-- [ ] **Step 1: Write failing test for parsing `[fluentbit]`**
+- [x] **Step 1: Write failing test for parsing `[fluentbit]`**
 
 In `mod tests` of `src/config.rs`:
 
@@ -635,14 +635,14 @@ fn test_fluentbit_systemd_filter_parsed() {
 }
 ```
 
-- [ ] **Step 2: Run failing tests**
+- [x] **Step 2: Run failing tests**
 
 ```bash
 cargo test --lib config::tests::test_fluentbit -- --nocapture
 ```
 Expected: compile error — `Config` has no `fluentbit` field.
 
-- [ ] **Step 3: Add `FluentbitConfig` struct and field**
+- [x] **Step 3: Add `FluentbitConfig` struct and field**
 
 Append to `src/config.rs` next to `MqttConfig`:
 
@@ -676,7 +676,7 @@ impl Default for FluentbitConfig {
 
 Add `pub fluentbit: FluentbitConfig,` to the `Config` struct (after `pub mqtt: MqttConfig,`).
 
-- [ ] **Step 4: Update `FULL_TEST_CONFIG`**
+- [x] **Step 4: Update `FULL_TEST_CONFIG`**
 
 In `src/config.rs`, append to `FULL_TEST_CONFIG`:
 
@@ -695,14 +695,14 @@ config_path = "/etc/fluent-bit.conf"
 
 Also append the same block to every other inline TOML string in tests that uses a full config (search: `\[mqtt\]` inside tests, and append `[fluentbit] ...` directly after the mqtt block). Specifically: the inline TOMLs in `test_parse_full_config`, `test_sensor_config_full`, and any other test that constructs a complete Config from a TOML string.
 
-- [ ] **Step 5: Run the parsing tests to confirm pass**
+- [x] **Step 5: Run the parsing tests to confirm pass**
 
 ```bash
 cargo test --lib config::tests
 ```
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/config.rs

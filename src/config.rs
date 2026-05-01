@@ -39,6 +39,7 @@ pub struct Config {
     pub sensors: SensorsConfig,
     pub camera: CameraConfig,
     pub mqtt: MqttConfig,
+    pub fluentbit: FluentbitConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -128,6 +129,32 @@ pub struct MqttConfig {
     pub port: u16,
     pub env_prefix: String,
     pub telemetry_interval_s: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct FluentbitConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub tls: bool,
+    pub tls_verify: bool,
+    pub config_path: String,
+    #[serde(default)]
+    pub systemd_filter: Option<Vec<String>>,
+}
+
+impl Default for FluentbitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "logs.example.com".to_string(),
+            port: 24224,
+            tls: true,
+            tls_verify: true,
+            config_path: "/etc/fluent-bit.conf".to_string(),
+            systemd_filter: None,
+        }
+    }
 }
 
 impl Default for SensorsConfig {
@@ -562,6 +589,15 @@ host = "mqtt.example.com"
 port = 8883
 env_prefix = "test"
 telemetry_interval_s = 1.0
+
+[fluentbit]
+enabled = false
+host = "logs.example.com"
+port = 24224
+tls = true
+tls_verify = true
+config_path = "/etc/fluent-bit.conf"
+# systemd_filter placeholder
 "#;
 
     pub fn test_config() -> Config {
@@ -628,6 +664,14 @@ host = "mqtt.example.com"
 port = 8883
 env_prefix = "test"
 telemetry_interval_s = 1.0
+
+[fluentbit]
+enabled = false
+host = "logs.example.com"
+port = 24224
+tls = true
+tls_verify = true
+config_path = "/etc/fluent-bit.conf"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.general.debug);
@@ -976,6 +1020,14 @@ host = "mqtt.example.com"
 port = 8883
 env_prefix = "test"
 telemetry_interval_s = 1.0
+
+[fluentbit]
+enabled = false
+host = "logs.example.com"
+port = 24224
+tls = true
+tls_verify = true
+config_path = "/etc/fluent-bit.conf"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
@@ -1623,5 +1675,30 @@ enabled = true
         config.sensors.lte.modem_type = "serial".to_string();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("sensors.lte.modem_type"));
+    }
+
+    #[test]
+    fn test_fluentbit_config_parsed() {
+        let config = test_config();
+        assert!(!config.fluentbit.enabled);
+        assert_eq!(config.fluentbit.host, "logs.example.com");
+        assert_eq!(config.fluentbit.port, 24224);
+        assert!(config.fluentbit.tls);
+        assert!(config.fluentbit.tls_verify);
+        assert_eq!(config.fluentbit.config_path, "/etc/fluent-bit.conf");
+        assert!(config.fluentbit.systemd_filter.is_none());
+    }
+
+    #[test]
+    fn test_fluentbit_systemd_filter_parsed() {
+        let toml_str = FULL_TEST_CONFIG.replace(
+            "# systemd_filter placeholder",
+            "systemd_filter = [\"_SYSTEMD_UNIT=unitctl.service\", \"_SYSTEMD_UNIT=mavlink.service\"]",
+        );
+        let config: Config = toml::from_str(&toml_str).unwrap();
+        let filter = config.fluentbit.systemd_filter.unwrap();
+        assert_eq!(filter.len(), 2);
+        assert_eq!(filter[0], "_SYSTEMD_UNIT=unitctl.service");
+        assert_eq!(filter[1], "_SYSTEMD_UNIT=mavlink.service");
     }
 }

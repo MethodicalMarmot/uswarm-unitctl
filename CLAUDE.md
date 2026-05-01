@@ -38,7 +38,9 @@ make schema
 - `[mavlink]` section includes `local_mavlink_port` (u16, used for Rust code TCP connection), `remote_mavlink_port` (u16, written to env file), `gcs_ip` (String), and `env_path` (String) fields. `self_sysid = 0` is the autodiscovery sentinel — the effective sysid is resolved at runtime via `Context::self_sysid()` as the minimum FC sysid in `Context.available_systems` (`self_sysid` uniqueness checks in `Config::validate()` are skipped in this mode; `gcs_sysid`/`sniffer_sysid`/`bs_sysid` uniqueness still applies).
 - `[camera]` section configures camera env file generation: `gcs_ip`, `env_path`, `remote_video_port`, `width`, `height`, `framerate`, `bitrate`, `flip`, `camera_type` (`rpi`, `usb`, `usb_yuy2`, `siyi`, `openipc`, or `fake` for simulation), `device`
 - `[sensors]` section configures three sensors (ping, lte, system) — each can be enabled/disabled independently with optional per-sensor `interval_s` override (falls back to `default_interval_s`, which defaults to 5s). Ping sensor uses `general.interface` for binding. `[sensors.lte]` also requires `modem_type` (`"dbus"` for real ModemManager or `"fake"` for deterministic simulation) and `neighbor_expiry_s` (f64). `[sensors.system]` only takes `enabled` and optional `interval_s`.
-- `[mqtt]` section configures MQTT communication with a central server: `enabled` (bool), `host`, `port` (8883 for TLS), `ca_cert_path`, `client_cert_path`, `client_key_path` (mutual TLS), `env_prefix` (topic namespace), `telemetry_interval_s`
+- `[general]` also carries optional shared mutual-TLS material: `ca_cert_path`, `client_cert_path`, `client_key_path` (`Option<String>`), consumed by both `[mqtt]` and `[fluentbit]`. MQTT requires them via `MqttTransport::new(&Config)` when `mqtt.enabled`; Fluent Bit validation rejects `tls = true` unless all three are set.
+- `[mqtt]` section configures MQTT communication with a central server: `enabled` (bool), `host`, `port` (8883 for TLS), `env_prefix` (topic namespace), `telemetry_interval_s`. TLS cert paths now live in `[general]` (see above); `MqttTransport::new` returns `MissingTlsConfig { field }` if a required path is unset.
+- `[fluentbit]` section configures the Fluent Bit log forwarder env writer: `enabled` (bool), `host`, `port` (u16), `tls` (bool), `tls_verify` (bool), `config_path` (output path of generated YAML; the bundled `fluentbit.service` reads `/etc/fluent-bit.conf`), and optional `systemd_filter: Option<Vec<String>>` (journald `KEY=VALUE` filters; key must match `[A-Z_][A-Z0-9_]*`). Filter values are emitted as double-quoted YAML scalars to avoid YAML metachar interpretation.
 
 ## Architecture
 
@@ -88,6 +90,7 @@ Write-on-start module that generates environment files for external services (ma
 
 - **MavlinkEnvWriter** (`env/mavlink_env.rs`) — writes mavlink.env with GCS_IP, REMOTE_MAVLINK_PORT, SNIFFER_SYS_ID, LOCAL_MAVLINK_PORT, FC_TTY, FC_BAUDRATE. Path configured via `mavlink.env_path`.
 - **CameraEnvWriter** (`env/camera_env.rs`) — writes camera.env with GCS_IP, REMOTE_VIDEO_PORT, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FRAMERATE, CAMERA_BITRATE, CAMERA_FLIP, CAMERA_TYPE, CAMERA_DEVICE. Path configured via `camera.env_path`.
+- **FluentbitEnvWriter** (`env/fluentbit_env.rs`) — when `fluentbit.enabled`, generates a Fluent Bit YAML config (systemd input → forward output, with optional mutual-TLS) at `fluentbit.config_path` using an atomic tmp+rename. Skips entirely when disabled. `generate_fluentbit_config()` returns `FluentbitGenError::MissingCert` if TLS is on but a `general.*_cert_path` is unset (also caught by `Config::validate()` as a fail-fast). The bundled `services/fluentbit-watcher.path` watches the config file and triggers `services/fluentbit-watcher.service` to `systemctl restart fluentbit` on change.
 - Env file format: plain text, one KEY=VALUE per line, no quotes, no trailing newline.
 
 ### MAVLink Components (`mavlink/`)
@@ -119,6 +122,9 @@ Both drone and sniffer components reconnect with 1s backoff on TCP connection fa
 - `CameraConfig` — camera env file settings: gcs_ip, env_path, video port, resolution, framerate, bitrate, flip, camera_type, device
 - `MavlinkEnvWriter` — writes mavlink env file at startup from mavlink config (defined in `env/mavlink_env.rs`)
 - `CameraEnvWriter` — writes camera env file at startup from camera config (defined in `env/camera_env.rs`)
+- `FluentbitEnvWriter` — writes Fluent Bit YAML config at startup when `fluentbit.enabled` (defined in `env/fluentbit_env.rs`)
+- `FluentbitConfig` — fluentbit env file settings: enabled, host, port, tls, tls_verify, config_path, optional systemd_filter (defined in `config.rs`)
+- `FluentbitGenError::MissingCert` — emitted when `fluentbit.tls` is set but a `general.*_cert_path` is unset (defined in `env/fluentbit_env.rs`)
 - `ModemAccessService` — queue-based modem access proxy, serializes AT commands through a worker task (defined in `services/modem_access/mod.rs`)
 - `ModemAccess` trait — async modem interface (model, command, imsi, registration_status) defined in `services/modem_access/mod.rs`
 - `FakeModemAccess` — deterministic ModemAccess implementation for simulation; monotonic counter drives drifting LTE signal values (defined in `services/modem_access/fake.rs`)

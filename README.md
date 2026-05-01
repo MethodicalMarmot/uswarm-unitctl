@@ -203,6 +203,11 @@ cp config.toml.example config.toml
 [general]
 debug = false                # Enable debug logging via config (also enabled by --debug CLI flag)
 interface = "eth0"           # Network interface name for ping sensor binding and MQTT status IP
+env_dir = "/var/run/unitctl" # Runtime state directory (e.g. pending-restart-uuid)
+# Optional shared mutual-TLS material consumed by [mqtt] and [fluentbit]
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
 
 [mavlink]
 protocol = "tcpout"          # Connection protocol (only "tcpout" supported)
@@ -257,11 +262,18 @@ device = "/dev/video1"       # Camera device path
 enabled = false              # Enable MQTT communication with central server
 host = "mqtt.example.com"   # MQTT broker hostname
 port = 8883                  # MQTT broker port (8883 for TLS)
-ca_cert_path = "/etc/unitctl/certs/ca.pem"       # CA certificate
-client_cert_path = "/etc/unitctl/certs/client.pem" # Client certificate (CN = node ID)
-client_key_path = "/etc/unitctl/certs/client.key"   # Client private key
 env_prefix = "prod"          # Topic namespace prefix (e.g. "prod", "staging")
 telemetry_interval_s = 1.0   # Sensor telemetry publish interval in seconds
+# Note: ca_cert_path / client_cert_path / client_key_path now live under [general]
+
+[fluentbit]
+enabled = false              # When true, write a Fluent Bit YAML config at startup
+host = "logs.example.com"   # Forward output destination
+port = 24224                 # Forward output port
+tls = true                   # Use mutual TLS (requires general.*_cert_path)
+tls_verify = true            # Verify the server certificate
+config_path = "/etc/fluent-bit.conf"  # Output path for the generated YAML
+# systemd_filter = ["_SYSTEMD_UNIT=unitctl.service"]  # Optional journald filters
 ```
 
 All sections and fields must be present in the config file. The only optional field is `interval_s` on each sensor, which overrides `default_interval_s` when set.

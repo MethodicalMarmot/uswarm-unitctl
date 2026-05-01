@@ -92,7 +92,7 @@ telemetry_interval_s = 5.0
 # startup. The bundled `fluentbit.service` reads /etc/fluent-bit.conf, so set
 # `config_path` to that path unless you also override the systemd unit. When
 # `tls = true`, `general.{ca,client}_cert_path` and `general.client_key_path`
-# must all be set; otherwise the writer skips and an error is logged.
+# must all be set; otherwise config validation fails at startup.
 [fluentbit]
 enabled = false
 host = "logs.example.com"

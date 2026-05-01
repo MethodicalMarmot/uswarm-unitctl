@@ -29,9 +29,15 @@ pub fn generate_fluentbit_config(config: &Config) -> Result<String, FluentbitGen
         if !filters.is_empty() {
             out.push_str("      systemd_filter:\n");
             for entry in filters {
-                out.push_str("        - ");
-                out.push_str(entry);
-                out.push('\n');
+                out.push_str("        - \"");
+                for c in entry.chars() {
+                    match c {
+                        '\\' => out.push_str("\\\\"),
+                        '"' => out.push_str("\\\""),
+                        _ => out.push(c),
+                    }
+                }
+                out.push_str("\"\n");
             }
         }
     }
@@ -180,7 +186,7 @@ mod tests {
         ]);
         let yaml = generate_fluentbit_config(&cfg).unwrap();
         assert!(yaml.contains(
-            "systemd_filter:\n        - _SYSTEMD_UNIT=unitctl.service\n        - PRIORITY=4\n"
+            "systemd_filter:\n        - \"_SYSTEMD_UNIT=unitctl.service\"\n        - \"PRIORITY=4\"\n"
         ));
     }
 

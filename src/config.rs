@@ -529,6 +529,30 @@ impl Config {
                         .to_string(),
                 ));
             }
+            if f.host.contains('\n') || f.host.contains('\r') {
+                return Err(ConfigError::Validation(
+                    "fluentbit.host must not contain newline characters".to_string(),
+                ));
+            }
+            if f.tls {
+                for (field, v) in [
+                    ("general.ca_cert_path", self.general.ca_cert_path.as_deref()),
+                    (
+                        "general.client_cert_path",
+                        self.general.client_cert_path.as_deref(),
+                    ),
+                    (
+                        "general.client_key_path",
+                        self.general.client_key_path.as_deref(),
+                    ),
+                ] {
+                    if !matches!(v, Some(s) if !s.is_empty()) {
+                        return Err(ConfigError::Validation(format!(
+                            "{field} must be set when fluentbit.tls = true"
+                        )));
+                    }
+                }
+            }
             if f.port == 0 {
                 return Err(ConfigError::Validation(
                     "fluentbit.port must be greater than 0".to_string(),

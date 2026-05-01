@@ -15,14 +15,24 @@ maybe_start() {
 
 install_packages() {
   apt-get update
-  apt-get update && apt-get install -y --no-install-recommends \
+  apt-get install -y --no-install-recommends \
         systemd systemd-sysv iputils-ping \
-        socat bash ca-certificates \
+        socat bash ca-certificates curl gnupg \
         gstreamer1.0-tools gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-plugins-ugly gstreamer1.0-libav \
         gstreamer1.0-x \
         libssl3 libdbus-1-3 modemmanager dnsutils rsync
+
+  # Fluent Bit official apt repository (Debian bookworm).
+  install -d -m 0755 /usr/share/keyrings
+  curl -fsSL https://packages.fluentbit.io/fluentbit.key \
+    | gpg --dearmor --yes -o /usr/share/keyrings/fluentbit-keyring.gpg
+  echo "deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/debian/bookworm bookworm main" \
+    > /etc/apt/sources.list.d/fluent-bit.list
+  apt-get update
+  apt-get install -y --no-install-recommends fluent-bit
+
   rm -rf /var/lib/apt/lists/*
 }
 
@@ -56,6 +66,14 @@ install() {
     maybe_start camera-watcher.path
   }
 
+  echo "Setting up fluentbit services..."
+  systemctl-exists fluentbit.service || systemctl link ./services/fluentbit.service
+  systemctl-exists fluentbit-watcher.service || {
+    systemctl link ./services/fluentbit-watcher.service
+    systemctl enable ./services/fluentbit-watcher.path
+    maybe_start fluentbit-watcher.path
+  }
+
   systemctl-exists unitctl.service || systemctl enable ./services/unitctl.service
   systemctl-exists unitctl-watcher.service || {
     systemctl link ./services/unitctl-watcher.service
@@ -78,11 +96,13 @@ install() {
 
 uninstall() {
     echo "Uninstalling services..."
-    systemctl disable --now mavlink-watcher.path mavlink-restart.timer camera-watcher.path unitctl-watcher.path modem-restart.timer || true
+    systemctl disable --now mavlink-watcher.path mavlink-restart.timer camera-watcher.path unitctl-watcher.path modem-restart.timer fluentbit-watcher.path || true
     systemctl disable --now mavlink.service || true
     systemctl disable --now mavlink-watcher.service || true
     systemctl disable --now camera.service || true
     systemctl disable --now camera-watcher.service || true
+    systemctl disable --now fluentbit.service || true
+    systemctl disable --now fluentbit-watcher.service || true
     systemctl disable --now unitctl.service || true
     systemctl disable --now unitctl-watcher.service || true
     systemctl disable --now modem-restart.service || true

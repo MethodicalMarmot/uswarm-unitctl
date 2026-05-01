@@ -1532,7 +1532,7 @@ git commit -m "feat(systemd): fluentbit service + path watcher"
 
 Adds Fluent Bit installation (apt repo + package) and systemd unit linking.
 
-- [ ] **Step 1: Add `curl` and `gnupg` to the package list**
+- [x] **Step 1: Add `curl` and `gnupg` to the package list**
 
 In `scripts/install.sh`, replace the body of `install_packages()` with:
 
@@ -1561,7 +1561,7 @@ install_packages() {
 }
 ```
 
-- [ ] **Step 2: Add fluentbit setup to `install()`**
+- [x] **Step 2: Add fluentbit setup to `install()`**
 
 In `install()`, immediately after the camera services block (after the `systemctl-exists camera-watcher.service ...` block), insert:
 
@@ -1575,7 +1575,7 @@ In `install()`, immediately after the camera services block (after the `systemct
   }
 ```
 
-- [ ] **Step 3: Add fluentbit teardown to `uninstall()`**
+- [x] **Step 3: Add fluentbit teardown to `uninstall()`**
 
 In `uninstall()`, replace the first composite `systemctl disable --now ...` line with:
 
@@ -1590,14 +1590,14 @@ Add new lines after the `systemctl disable --now camera-watcher.service || true`
     systemctl disable --now fluentbit-watcher.service || true
 ```
 
-- [ ] **Step 4: Static-check the script**
+- [x] **Step 4: Static-check the script**
 
 ```bash
 bash -n scripts/install.sh
 ```
 Expected: exit 0 (no syntax errors).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/install.sh

@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    CameraConfig, Config, GeneralConfig, MavlinkConfig, MqttConfig, SensorsConfig,
+    CameraConfig, Config, FluentbitConfig, GeneralConfig, MavlinkConfig, MqttConfig, SensorsConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -19,6 +19,7 @@ pub struct SafeConfig {
     pub sensors: SensorsConfig,
     pub camera: CameraConfig,
     pub mqtt: SafeMqttConfig,
+    pub fluentbit: FluentbitConfig,
 }
 
 /// General config with TLS cert paths redacted.
@@ -50,6 +51,7 @@ impl From<&Config> for SafeConfig {
             sensors: config.sensors.clone(),
             camera: config.camera.clone(),
             mqtt: SafeMqttConfig::from(&config.mqtt),
+            fluentbit: config.fluentbit.clone(),
         }
     }
 }
@@ -294,6 +296,17 @@ mod tests {
         assert!(safe.general.ca_cert_path.is_none());
         assert!(safe.general.client_cert_path.is_none());
         assert!(safe.general.client_key_path.is_none());
+    }
+
+    #[test]
+    fn test_safe_config_includes_fluentbit_unredacted() {
+        use crate::config::tests::test_config;
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.host = "central.example.com".to_string();
+        let safe: SafeConfig = (&cfg).into();
+        assert!(safe.fluentbit.enabled);
+        assert_eq!(safe.fluentbit.host, "central.example.com");
     }
 
     // -----------------------------------------------------------------------

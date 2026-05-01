@@ -909,7 +909,7 @@ git commit -m "feat(config): validate [fluentbit] section"
 
 Now that `FluentbitConfig` exists, surface it in `SafeConfig` (no redaction needed — no secrets in the section).
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 In `src/messages/commands.rs` `mod tests`:
 
@@ -926,14 +926,14 @@ fn test_safe_config_includes_fluentbit_unredacted() {
 }
 ```
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 ```bash
 cargo test --lib messages::commands::tests::test_safe_config_includes_fluentbit -- --nocapture
 ```
 Expected: compile error — `SafeConfig` has no `fluentbit` field.
 
-- [ ] **Step 3: Add `fluentbit` to `SafeConfig`**
+- [x] **Step 3: Add `fluentbit` to `SafeConfig`**
 
 In `src/messages/commands.rs`, update the `use` line to:
 
@@ -974,7 +974,7 @@ impl From<&Config> for SafeConfig {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 ```bash
 cargo test --lib messages::commands::tests
@@ -982,7 +982,7 @@ cargo test --lib services::mqtt::handlers::get_config::tests
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/messages/commands.rs src/services/mqtt/handlers/get_config.rs

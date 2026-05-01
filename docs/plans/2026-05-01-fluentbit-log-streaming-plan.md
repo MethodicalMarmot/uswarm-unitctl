@@ -999,7 +999,7 @@ git commit -m "feat(safe-config): expose [fluentbit] in SafeConfig"
 
 Pure function rendering YAML from `&Config`. Caller-side enabled-check; this function only runs when `fluentbit.enabled = true`.
 
-- [ ] **Step 1: Create the file with stub + failing test**
+- [x] **Step 1: Create the file with stub + failing test**
 
 Create `src/env/fluentbit_env.rs`:
 
@@ -1210,7 +1210,7 @@ mod tests {
 
 (The `error::<()>` / `info::<()>` calls in the stub `Task::run` are placeholders silenced by the unused-result lint; they reference unused imports so they're removed in Task 7. Drop them with the unused functions in the next task.)
 
-- [ ] **Step 2: Wire up the module**
+- [x] **Step 2: Wire up the module**
 
 In `src/env/mod.rs`, replace the contents with:
 
@@ -1224,14 +1224,14 @@ pub use fluentbit_env::FluentbitEnvWriter;
 pub use mavlink_env::MavlinkEnvWriter;
 ```
 
-- [ ] **Step 3: Run the new tests**
+- [x] **Step 3: Run the new tests**
 
 ```bash
 cargo test --lib env::fluentbit_env
 ```
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/env/fluentbit_env.rs src/env/mod.rs

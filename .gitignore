@@ -1,0 +1,10 @@
+.pio
+*.iml
+.idea
+.vscode
+__pycache__
+*.py[cod]
+*$py.class
+*.swp
+*.svg
+venv

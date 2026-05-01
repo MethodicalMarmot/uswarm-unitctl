@@ -1,6 +1,6 @@
 use unitctl::config::{self, Cli};
 use unitctl::context::Context;
-use unitctl::env::{CameraEnvWriter, MavlinkEnvWriter};
+use unitctl::env::{CameraEnvWriter, FluentbitEnvWriter, MavlinkEnvWriter};
 use unitctl::mavlink::drone_component::DroneComponent;
 use unitctl::mavlink::sniffer_component::MavlinkSniffer;
 use unitctl::mavlink::telemetry_reporter::TelemetryReporter;
@@ -117,6 +117,9 @@ async fn main() {
 
     let camera_env = Arc::new(CameraEnvWriter::new(Arc::clone(&ctx)));
     handles.extend(camera_env.run());
+
+    let fluentbit_env = Arc::new(FluentbitEnvWriter::new(Arc::clone(&ctx)));
+    handles.extend(fluentbit_env.run());
 
     let sensor_manager = Arc::new(SensorManager::new(
         Arc::clone(&ctx),

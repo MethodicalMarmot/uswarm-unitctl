@@ -1410,7 +1410,7 @@ git commit -m "feat(env): FluentbitEnvWriter writes Fluent Bit YAML at startup"
 **Files:**
 - Modify: `src/main.rs`
 
-- [ ] **Step 1: Update imports**
+- [x] **Step 1: Update imports**
 
 In `src/main.rs`, replace
 ```rust
@@ -1421,7 +1421,7 @@ with
 use unitctl::env::{CameraEnvWriter, FluentbitEnvWriter, MavlinkEnvWriter};
 ```
 
-- [ ] **Step 2: Spawn the writer**
+- [x] **Step 2: Spawn the writer**
 
 In `src/main.rs`, immediately after the existing `let camera_env = ...; handles.extend(camera_env.run());` block, insert:
 
@@ -1430,14 +1430,14 @@ In `src/main.rs`, immediately after the existing `let camera_env = ...; handles.
     handles.extend(fluentbit_env.run());
 ```
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 ```bash
 cargo build --release
 ```
 Expected: success.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/main.rs

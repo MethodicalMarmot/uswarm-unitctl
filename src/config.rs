@@ -46,6 +46,12 @@ pub struct GeneralConfig {
     pub debug: bool,
     pub interface: String,
     pub env_dir: String,
+    #[serde(default)]
+    pub ca_cert_path: Option<String>,
+    #[serde(default)]
+    pub client_cert_path: Option<String>,
+    #[serde(default)]
+    pub client_key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -396,6 +402,32 @@ impl Config {
             return Err(ConfigError::Validation(
                 "general.env_dir must not contain newline characters".to_string(),
             ));
+        }
+
+        // Validate optional general TLS cert paths.
+        for (field, value) in [
+            ("general.ca_cert_path", self.general.ca_cert_path.as_deref()),
+            (
+                "general.client_cert_path",
+                self.general.client_cert_path.as_deref(),
+            ),
+            (
+                "general.client_key_path",
+                self.general.client_key_path.as_deref(),
+            ),
+        ] {
+            if let Some(v) = value {
+                if v.is_empty() {
+                    return Err(ConfigError::Validation(format!(
+                        "{field} must not be empty when set"
+                    )));
+                }
+                if v.contains('\n') || v.contains('\r') {
+                    return Err(ConfigError::Validation(format!(
+                        "{field} must not contain newline characters"
+                    )));
+                }
+            }
         }
 
         // Validate sensor intervals (must be finite and positive; TOML allows inf/nan)
@@ -1135,6 +1167,71 @@ telemetry_interval_s = 1.0
         let config = test_config();
         assert_eq!(config.general.interface, "eth0");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_general_cert_paths_parsed_when_present() {
+        // Replace the existing [general] block to include cert paths.
+        let toml_str = FULL_TEST_CONFIG.replace(
+            "env_dir = \"/var/run/unitctl\"",
+            "env_dir = \"/var/run/unitctl\"\nca_cert_path = \"/etc/unitctl/certs/ca.pem\"\n\
+             client_cert_path = \"/etc/unitctl/certs/client.pem\"\n\
+             client_key_path = \"/etc/unitctl/certs/client.key\"",
+        );
+        let config: Config = toml::from_str(&toml_str).expect("parse with cert paths");
+        assert_eq!(
+            config.general.ca_cert_path.as_deref(),
+            Some("/etc/unitctl/certs/ca.pem")
+        );
+        assert_eq!(
+            config.general.client_cert_path.as_deref(),
+            Some("/etc/unitctl/certs/client.pem")
+        );
+        assert_eq!(
+            config.general.client_key_path.as_deref(),
+            Some("/etc/unitctl/certs/client.key")
+        );
+    }
+
+    #[test]
+    fn test_general_cert_paths_default_to_none_when_absent() {
+        let config = test_config();
+        assert!(config.general.ca_cert_path.is_none());
+        assert!(config.general.client_cert_path.is_none());
+        assert!(config.general.client_key_path.is_none());
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_general_ca_cert_path() {
+        let mut cfg = test_config();
+        cfg.general.ca_cert_path = Some(String::new());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("general.ca_cert_path"));
+    }
+
+    #[test]
+    fn test_validate_rejects_newline_general_client_cert_path() {
+        let mut cfg = test_config();
+        cfg.general.client_cert_path = Some("/etc/cert.pem\nEVIL".to_string());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("general.client_cert_path"));
+    }
+
+    #[test]
+    fn test_validate_rejects_carriage_return_general_client_key_path() {
+        let mut cfg = test_config();
+        cfg.general.client_key_path = Some("/etc/key.pem\rEVIL".to_string());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("general.client_key_path"));
+    }
+
+    #[test]
+    fn test_validate_accepts_none_general_cert_paths() {
+        let mut cfg = test_config();
+        cfg.general.ca_cert_path = None;
+        cfg.general.client_cert_path = None;
+        cfg.general.client_key_path = None;
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

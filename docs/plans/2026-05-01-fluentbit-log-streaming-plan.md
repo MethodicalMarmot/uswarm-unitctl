@@ -33,14 +33,14 @@
 
 ---
 
-## Task 1: Add optional TLS cert paths to `GeneralConfig`
+### Task 1: Add optional TLS cert paths to `GeneralConfig`
 
 **Files:**
 - Modify: `src/config.rs`
 
 Adds three `Option<String>` cert fields to `GeneralConfig` (additive — `MqttConfig` keeps its fields for now so the build stays green). Adds `Config::validate()` checks: when `Some`, the value must be non-empty and contain no `\n` / `\r`.
 
-- [ ] **Step 1: Write failing test for parsing `general.*_cert_path`**
+- [x] **Step 1: Write failing test for parsing `general.*_cert_path`**
 
 Add to `mod tests` in `src/config.rs` (place near the existing `test_general_interface_roundtrips`):
 
@@ -83,14 +83,14 @@ fn test_general_cert_paths_default_to_none_when_absent() {
 }
 ```
 
-- [ ] **Step 2: Run the new tests to confirm failure**
+- [x] **Step 2: Run the new tests to confirm failure**
 
 ```bash
 cargo test --lib config::tests::test_general_cert_paths -- --exact --nocapture
 ```
 Expected: compile error — fields don't exist on `GeneralConfig`.
 
-- [ ] **Step 3: Add the fields to `GeneralConfig`**
+- [x] **Step 3: Add the fields to `GeneralConfig`**
 
 Edit `src/config.rs` — replace the existing `GeneralConfig` definition with:
 
@@ -109,14 +109,14 @@ pub struct GeneralConfig {
 }
 ```
 
-- [ ] **Step 4: Run the parsing tests to confirm pass**
+- [x] **Step 4: Run the parsing tests to confirm pass**
 
 ```bash
 cargo test --lib config::tests::test_general_cert_paths -- --nocapture
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Write failing tests for cert-path validation**
+- [x] **Step 5: Write failing tests for cert-path validation**
 
 Add to `mod tests` in `src/config.rs`:
 
@@ -155,14 +155,14 @@ fn test_validate_accepts_none_general_cert_paths() {
 }
 ```
 
-- [ ] **Step 6: Run the validation tests to confirm failure**
+- [x] **Step 6: Run the validation tests to confirm failure**
 
 ```bash
 cargo test --lib config::tests::test_validate -- --nocapture 2>&1 | tail -20
 ```
 Expected: the three "rejects" tests FAIL (validate currently accepts anything).
 
-- [ ] **Step 7: Add the validation rules**
+- [x] **Step 7: Add the validation rules**
 
 In `src/config.rs`, in `Config::validate()`, after the existing `general.env_dir` newline check (immediately before the sensor interval block), insert:
 
@@ -194,14 +194,14 @@ In `src/config.rs`, in `Config::validate()`, after the existing `general.env_dir
         }
 ```
 
-- [ ] **Step 8: Run all config tests**
+- [x] **Step 8: Run all config tests**
 
 ```bash
 cargo test --lib config::tests
 ```
 Expected: all PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/config.rs
@@ -210,7 +210,7 @@ git commit -m "feat(config): add optional TLS cert paths to [general]"
 
 ---
 
-## Task 2: Move TLS cert paths from `[mqtt]` to `[general]`
+### Task 2: Move TLS cert paths from `[mqtt]` to `[general]`
 
 **Files:**
 - Modify: `src/config.rs`
@@ -597,7 +597,7 @@ git commit -m "refactor(config): move TLS cert paths from [mqtt] to [general]"
 
 ---
 
-## Task 3: Add `FluentbitConfig` to `Config`
+### Task 3: Add `FluentbitConfig` to `Config`
 
 **Files:**
 - Modify: `src/config.rs`
@@ -711,7 +711,7 @@ git commit -m "feat(config): add [fluentbit] section"
 
 ---
 
-## Task 4: Validate `[fluentbit]` in `Config::validate()`
+### Task 4: Validate `[fluentbit]` in `Config::validate()`
 
 **Files:**
 - Modify: `src/config.rs`
@@ -901,7 +901,7 @@ git commit -m "feat(config): validate [fluentbit] section"
 
 ---
 
-## Task 5: Add `fluentbit` to `SafeConfig`
+### Task 5: Add `fluentbit` to `SafeConfig`
 
 **Files:**
 - Modify: `src/messages/commands.rs`
@@ -991,7 +991,7 @@ git commit -m "feat(safe-config): expose [fluentbit] in SafeConfig"
 
 ---
 
-## Task 6: `generate_fluentbit_config()` pure helper
+### Task 6: `generate_fluentbit_config()` pure helper
 
 **Files:**
 - Create: `src/env/fluentbit_env.rs`
@@ -1240,7 +1240,7 @@ git commit -m "feat(env): generate_fluentbit_config helper + module skeleton"
 
 ---
 
-## Task 7: Implement `FluentbitEnvWriter::run`
+### Task 7: Implement `FluentbitEnvWriter::run`
 
 **Files:**
 - Modify: `src/env/fluentbit_env.rs`
@@ -1405,7 +1405,7 @@ git commit -m "feat(env): FluentbitEnvWriter writes Fluent Bit YAML at startup"
 
 ---
 
-## Task 8: Wire `FluentbitEnvWriter` into `main.rs`
+### Task 8: Wire `FluentbitEnvWriter` into `main.rs`
 
 **Files:**
 - Modify: `src/main.rs`
@@ -1446,7 +1446,7 @@ git commit -m "feat(main): spawn FluentbitEnvWriter at startup"
 
 ---
 
-## Task 9: systemd unit files
+### Task 9: systemd unit files
 
 **Files:**
 - Create: `services/fluentbit.service`
@@ -1525,7 +1525,7 @@ git commit -m "feat(systemd): fluentbit service + path watcher"
 
 ---
 
-## Task 10: Update `scripts/install.sh`
+### Task 10: Update `scripts/install.sh`
 
 **Files:**
 - Modify: `scripts/install.sh`
@@ -1606,7 +1606,7 @@ git commit -m "feat(install): install Fluent Bit and link fluentbit systemd unit
 
 ---
 
-## Task 11: Update `config.toml.example` `[fluentbit]` block
+### Task 11: Update `config.toml.example` `[fluentbit]` block
 
 **Files:**
 - Modify: `config.toml.example`
@@ -1670,7 +1670,7 @@ git commit -m "docs(config): document [fluentbit] section in config.toml.example
 
 ---
 
-## Task 12: Final verification
+### Task 12: Final verification
 
 **Files:**
 - (no edits — read-only verification)

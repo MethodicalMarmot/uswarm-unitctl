@@ -86,3 +86,19 @@ env_prefix = "prod"
 # override): publishing faster than samples are taken just republishes the
 # previous reading with a fresh timestamp.
 telemetry_interval_s = 5.0
+
+# Fluent Bit log forwarder
+# When enabled, unitctl writes a Fluent Bit YAML config to `config_path` at
+# startup. The bundled `fluentbit.service` reads /etc/fluent-bit.conf, so set
+# `config_path` to that path unless you also override the systemd unit. When
+# `tls = true`, `general.{ca,client}_cert_path` and `general.client_key_path`
+# must all be set; otherwise the writer skips and an error is logged.
+[fluentbit]
+enabled = false
+host = "logs.example.com"
+port = 24224
+tls = true
+tls_verify = true
+config_path = "/etc/fluent-bit.conf"
+# Optional list of journald field filters (KEY=VALUE), AND-ed by Fluent Bit.
+# systemd_filter = ["_SYSTEMD_UNIT=unitctl.service", "_SYSTEMD_UNIT=mavlink.service"]

@@ -1849,4 +1849,14 @@ enabled = true
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("fluentbit.systemd_filter"));
     }
+
+    #[test]
+    fn test_config_toml_example_parses() {
+        let content = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.toml.example"),
+        )
+        .expect("read config.toml.example");
+        let config: Config = toml::from_str(&content).expect("parse config.toml.example");
+        config.validate().expect("validate config.toml.example");
+    }
 }

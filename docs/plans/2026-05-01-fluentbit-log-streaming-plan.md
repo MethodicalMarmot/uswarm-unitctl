@@ -1613,7 +1613,7 @@ git commit -m "feat(install): install Fluent Bit and link fluentbit systemd unit
 
 Cert-path move was done in Task 2. Now add the `[fluentbit]` section.
 
-- [ ] **Step 1: Append fluentbit section**
+- [x] **Step 1: Append fluentbit section**
 
 Append to `config.toml.example`:
 
@@ -1636,7 +1636,7 @@ config_path = "/etc/fluent-bit.conf"
 # systemd_filter = ["_SYSTEMD_UNIT=unitctl.service", "_SYSTEMD_UNIT=mavlink.service"]
 ```
 
-- [ ] **Step 2: Validate the example parses**
+- [x] **Step 2: Validate the example parses**
 
 Add a quick smoke test in `src/config.rs` (`mod tests`):
 
@@ -1654,14 +1654,14 @@ fn test_config_toml_example_parses() {
 
 (If a similar test already exists, skip this step.)
 
-- [ ] **Step 3: Run the smoke test**
+- [x] **Step 3: Run the smoke test**
 
 ```bash
 cargo test --lib config::tests::test_config_toml_example_parses
 ```
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add config.toml.example src/config.rs

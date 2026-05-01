@@ -123,6 +123,7 @@ pub struct SystemSensorConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MqttConfig {
     pub enabled: bool,
     pub host: String,
@@ -567,6 +568,15 @@ impl Config {
                 return Err(ConfigError::Validation(
                     "fluentbit.config_path must not contain newline characters".to_string(),
                 ));
+            }
+            // The bundled fluentbit.service and fluentbit-watcher.path units
+            // hard-code /etc/fluent-bit.conf; any other value silently breaks
+            // them. Pin the path here until the units are templated.
+            if f.config_path != crate::env::fluentbit_env::FLUENTBIT_CONFIG_PATH {
+                return Err(ConfigError::Validation(format!(
+                    "fluentbit.config_path must be {:?} (the path the bundled systemd units read)",
+                    crate::env::fluentbit_env::FLUENTBIT_CONFIG_PATH,
+                )));
             }
             if let Some(filters) = &f.systemd_filter {
                 for entry in filters {
@@ -1834,6 +1844,17 @@ enabled = true
         cfg.fluentbit.config_path = "/etc/fb.conf\nEVIL".to_string();
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("fluentbit.config_path"));
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_non_canonical_config_path_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.config_path = "/tmp/fluent-bit.conf".to_string();
+        let err = cfg.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("fluentbit.config_path"));
+        assert!(msg.contains("/etc/fluent-bit.conf"));
     }
 
     #[test]

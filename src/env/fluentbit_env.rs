@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::context::Context;
 use crate::Task;
+
+/// Filesystem path the bundled `fluentbit.service` and `fluentbit-watcher.path`
+/// units are hard-wired to. `Config::validate()` rejects any other value for
+/// `fluentbit.config_path` to keep the writer and the units in sync.
+pub const FLUENTBIT_CONFIG_PATH: &str = "/etc/fluent-bit.conf";
 
 /// Generate the Fluent Bit YAML config from `config`.
 ///
@@ -25,6 +30,9 @@ pub fn generate_fluentbit_config(config: &Config) -> Result<String, FluentbitGen
     out.push_str("    - name: systemd\n");
     out.push_str("      tag: host.*\n");
     out.push_str("      read_from_tail: off\n");
+    // Persist journal cursor across restarts; without `db`, Fluent Bit replays
+    // the entire journal every time the watcher restarts the service.
+    out.push_str("      db: /var/lib/fluent-bit/journal.db\n");
     if let Some(filters) = &f.systemd_filter {
         if !filters.is_empty() {
             out.push_str("      systemd_filter:\n");
@@ -94,16 +102,49 @@ impl FluentbitEnvWriter {
     }
 }
 
+/// Best-effort teardown when `fluentbit.enabled = false`: stop a running
+/// `fluentbit.service` and remove a stale config file. Without this, flipping
+/// the flag off while `fluentbit` is already running leaves log forwarding
+/// active on the in-memory config until the host reboots.
+fn disable_fluentbit(path: &str) {
+    info!("fluentbit disabled, stopping service and clearing stale config");
+    match std::process::Command::new("systemctl")
+        .args(["stop", "fluentbit.service"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            info!("stopped fluentbit.service");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            warn!(stderr = %stderr, "systemctl stop fluentbit returned non-zero (continuing)");
+        }
+        Err(e) => {
+            warn!(error = %e, "failed to invoke systemctl stop fluentbit (continuing)");
+        }
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => info!(path = %path, "removed stale fluentbit config"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            warn!(path = %path, error = %e, "failed to remove stale fluentbit config");
+        }
+    }
+}
+
 impl Task for FluentbitEnvWriter {
     fn run(self: Arc<Self>) -> Vec<tokio::task::JoinHandle<()>> {
         let ctx = Arc::clone(&self.ctx);
         let handle = tokio::spawn(async move {
             let cfg = &ctx.config;
             if !cfg.fluentbit.enabled {
-                info!("fluentbit disabled, skipping config write");
+                // When disabled, validate() doesn't run on the fluentbit block,
+                // so `cfg.fluentbit.config_path` is untrusted. Always operate on
+                // the pinned path the bundled units read; never unlink an
+                // attacker-controlled path.
+                disable_fluentbit(FLUENTBIT_CONFIG_PATH);
                 return;
             }
-
             let path = cfg.fluentbit.config_path.clone();
 
             let content = match generate_fluentbit_config(cfg) {
@@ -123,19 +164,51 @@ impl Task for FluentbitEnvWriter {
                 }
             }
 
-            // Atomic write: write to a sibling tmp file, then rename.
+            // We must write in place (not tmp+rename): the bundled
+            // `fluentbit-watcher.path` unit is `PathModified=/etc/fluent-bit.conf`,
+            // an inotify watch on the file's inode. A rename swaps in a new
+            // inode and leaves the watch on the orphaned old inode, so the
+            // watcher would miss the change. A direct truncate-write produces
+            // the IN_CLOSE_WRITE the path unit listens for.
+            //
+            // To make the in-place write resilient against ENOSPC / short
+            // writes, we (1) stage to a sibling tmp file first as a disk-space
+            // canary, (2) snapshot the existing content as a rollback, then
+            // (3) do the in-place write and restore the snapshot on failure.
             let tmp_path = format!("{path}.tmp");
             if let Err(e) = std::fs::write(&tmp_path, &content) {
-                error!(path = %tmp_path, error = %e, "failed to write fluentbit tmp file");
+                error!(path = %tmp_path, error = %e, "failed to stage fluentbit config (tmp write)");
                 return;
             }
-            match std::fs::rename(&tmp_path, &path) {
+            let backup = match std::fs::read(&path) {
+                Ok(b) => Some(b),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => {
+                    error!(path = %path, error = %e, "failed to read existing fluentbit config for rollback");
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return;
+                }
+            };
+            match std::fs::write(&path, &content) {
                 Ok(()) => info!(path = %path, "fluentbit config written"),
                 Err(e) => {
-                    error!(path = %path, error = %e, "failed to rename fluentbit tmp file");
-                    let _ = std::fs::remove_file(&tmp_path);
+                    error!(path = %path, error = %e, "failed to write fluentbit config; attempting rollback");
+                    match &backup {
+                        Some(prev) => match std::fs::write(&path, prev) {
+                            Ok(()) => warn!(path = %path, "rolled back fluentbit config to previous content"),
+                            Err(re) => error!(path = %path, error = %re, "rollback failed; fluentbit config may be corrupt"),
+                        },
+                        None => {
+                            if let Err(re) = std::fs::remove_file(&path) {
+                                if re.kind() != std::io::ErrorKind::NotFound {
+                                    error!(path = %path, error = %re, "failed to remove partially-written fluentbit config");
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            let _ = std::fs::remove_file(&tmp_path);
         });
         vec![handle]
     }
@@ -161,6 +234,7 @@ mod tests {
         assert!(yaml.contains("- name: systemd"));
         assert!(yaml.contains("read_from_tail: off"));
         assert!(yaml.contains("tag: host.*"));
+        assert!(yaml.contains("db: /var/lib/fluent-bit/journal.db"));
     }
 
     #[test]

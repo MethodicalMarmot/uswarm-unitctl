@@ -8,6 +8,9 @@ StartLimitIntervalSec=60
 [Service]
 Type=exec
 TimeoutStartSec=30s
+# Creates /var/lib/fluent-bit for the journal cursor db referenced in
+# the generated config; without persistence, every restart replays the journal.
+StateDirectory=fluent-bit
 ExecStartPre=/bin/sh -c 'until [ -f /etc/fluent-bit.conf ]; do sleep 0.1; done'
 ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit.conf
 Restart=on-failure

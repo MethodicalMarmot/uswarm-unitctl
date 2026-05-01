@@ -718,7 +718,7 @@ git commit -m "feat(config): add [fluentbit] section"
 
 Adds validation: when `fluentbit.enabled`, `host` non-empty + not `-`-prefixed, `port != 0`, `config_path` non-empty + no newlines, each `systemd_filter` entry has exactly one `=`, no newlines, key matches `[A-Z_][A-Z0-9_]*`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 In `mod tests` of `src/config.rs`:
 
@@ -816,14 +816,14 @@ fn test_fluentbit_systemd_filter_lowercase_key_rejected() {
 }
 ```
 
-- [ ] **Step 2: Run failing tests**
+- [x] **Step 2: Run failing tests**
 
 ```bash
 cargo test --lib config::tests::test_fluentbit_enabled -- --nocapture
 ```
 Expected: most "rejected" tests FAIL.
 
-- [ ] **Step 3: Add validation block in `Config::validate()`**
+- [x] **Step 3: Add validation block in `Config::validate()`**
 
 In `src/config.rs`, immediately before the final `Ok(())` of `Config::validate()`, insert:
 
@@ -885,14 +885,14 @@ In `src/config.rs`, immediately before the final `Ok(())` of `Config::validate()
         }
 ```
 
-- [ ] **Step 4: Run all config tests**
+- [x] **Step 4: Run all config tests**
 
 ```bash
 cargo test --lib config::tests
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/config.rs

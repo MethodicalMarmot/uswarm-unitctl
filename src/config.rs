@@ -520,6 +520,62 @@ impl Config {
             }
         }
 
+        // Validate fluentbit config (only when enabled)
+        if self.fluentbit.enabled {
+            let f = &self.fluentbit;
+            if f.host.is_empty() || f.host.starts_with('-') {
+                return Err(ConfigError::Validation(
+                    "fluentbit.host must be a non-empty value that does not start with '-'"
+                        .to_string(),
+                ));
+            }
+            if f.port == 0 {
+                return Err(ConfigError::Validation(
+                    "fluentbit.port must be greater than 0".to_string(),
+                ));
+            }
+            if f.config_path.is_empty() {
+                return Err(ConfigError::Validation(
+                    "fluentbit.config_path must not be empty".to_string(),
+                ));
+            }
+            if f.config_path.contains('\n') || f.config_path.contains('\r') {
+                return Err(ConfigError::Validation(
+                    "fluentbit.config_path must not contain newline characters".to_string(),
+                ));
+            }
+            if let Some(filters) = &f.systemd_filter {
+                for entry in filters {
+                    if entry.contains('\n') || entry.contains('\r') {
+                        return Err(ConfigError::Validation(format!(
+                            "fluentbit.systemd_filter entry {entry:?} must not contain newline characters"
+                        )));
+                    }
+                    let mut parts = entry.splitn(2, '=');
+                    let key = parts.next().unwrap_or("");
+                    let value_present = parts.next().is_some();
+                    if !value_present {
+                        return Err(ConfigError::Validation(format!(
+                            "fluentbit.systemd_filter entry {entry:?} must be KEY=VALUE"
+                        )));
+                    }
+                    let key_ok = !key.is_empty()
+                        && key
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+                        && key
+                            .chars()
+                            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+                    if !key_ok {
+                        return Err(ConfigError::Validation(format!(
+                            "fluentbit.systemd_filter entry {entry:?} key must match [A-Z_][A-Z0-9_]*"
+                        )));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -1700,5 +1756,97 @@ enabled = true
         assert_eq!(filter.len(), 2);
         assert_eq!(filter[0], "_SYSTEMD_UNIT=unitctl.service");
         assert_eq!(filter[1], "_SYSTEMD_UNIT=mavlink.service");
+    }
+
+    #[test]
+    fn test_fluentbit_disabled_skips_validation() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = false;
+        cfg.fluentbit.host = String::new();
+        cfg.fluentbit.port = 0;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_empty_host_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.host = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.host"));
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_dash_prefix_host_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.host = "-evil".to_string();
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.host"));
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_zero_port_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.port = 0;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.port"));
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_empty_config_path_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.config_path = String::new();
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.config_path"));
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_newline_config_path_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.config_path = "/etc/fb.conf\nEVIL".to_string();
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.config_path"));
+    }
+
+    #[test]
+    fn test_fluentbit_systemd_filter_valid_accepted() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.systemd_filter = Some(vec![
+            "_SYSTEMD_UNIT=unitctl.service".to_string(),
+            "PRIORITY=4".to_string(),
+        ]);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_fluentbit_systemd_filter_missing_eq_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.systemd_filter = Some(vec!["_SYSTEMD_UNIT".to_string()]);
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.systemd_filter"));
+    }
+
+    #[test]
+    fn test_fluentbit_systemd_filter_newline_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.systemd_filter = Some(vec!["_FOO=bar\nEVIL=1".to_string()]);
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.systemd_filter"));
+    }
+
+    #[test]
+    fn test_fluentbit_systemd_filter_lowercase_key_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.systemd_filter = Some(vec!["bad_key=1".to_string()]);
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.systemd_filter"));
     }
 }

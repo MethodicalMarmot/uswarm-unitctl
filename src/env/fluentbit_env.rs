@@ -6,11 +6,6 @@ use crate::config::Config;
 use crate::context::Context;
 use crate::Task;
 
-/// Filesystem path the bundled `fluentbit.service` and `fluentbit-watcher.path`
-/// units are hard-wired to. `Config::validate()` rejects any other value for
-/// `fluentbit.config_path` to keep the writer and the units in sync.
-pub const FLUENTBIT_CONFIG_PATH: &str = "/etc/fluent-bit.yaml";
-
 /// Generate the Fluent Bit YAML config from `config`.
 ///
 /// Caller must ensure `config.fluentbit.enabled == true`. When `fluentbit.tls`
@@ -32,7 +27,7 @@ pub fn generate_fluentbit_config(config: &Config) -> Result<String, FluentbitGen
     out.push_str("      read_from_tail: off\n");
     // Persist journal cursor across restarts; without `db`, Fluent Bit replays
     // the entire journal every time the watcher restarts the service.
-    out.push_str("      db: /var/lib/fluent-bit/journal.db\n");
+    out.push_str(&format!("      db: {}\n", f.db_path));
     if let Some(filters) = &f.systemd_filter {
         if !filters.is_empty() {
             out.push_str("      systemd_filter:\n");
@@ -142,7 +137,7 @@ impl Task for FluentbitEnvWriter {
                 // so `cfg.fluentbit.config_path` is untrusted. Always operate on
                 // the pinned path the bundled units read; never unlink an
                 // attacker-controlled path.
-                disable_fluentbit(FLUENTBIT_CONFIG_PATH);
+                disable_fluentbit(cfg.fluentbit.config_path.as_str());
                 return;
             }
             let path = cfg.fluentbit.config_path.clone();
@@ -195,8 +190,12 @@ impl Task for FluentbitEnvWriter {
                     error!(path = %path, error = %e, "failed to write fluentbit config; attempting rollback");
                     match &backup {
                         Some(prev) => match std::fs::write(&path, prev) {
-                            Ok(()) => warn!(path = %path, "rolled back fluentbit config to previous content"),
-                            Err(re) => error!(path = %path, error = %re, "rollback failed; fluentbit config may be corrupt"),
+                            Ok(()) => {
+                                warn!(path = %path, "rolled back fluentbit config to previous content")
+                            }
+                            Err(re) => {
+                                error!(path = %path, error = %re, "rollback failed; fluentbit config may be corrupt")
+                            }
                         },
                         None => {
                             if let Err(re) = std::fs::remove_file(&path) {
@@ -235,6 +234,14 @@ mod tests {
         assert!(yaml.contains("read_from_tail: off"));
         assert!(yaml.contains("tag: host.*"));
         assert!(yaml.contains("db: /var/lib/fluent-bit/journal.db"));
+    }
+
+    #[test]
+    fn test_generate_uses_configured_db_path() {
+        let mut cfg = enabled_config();
+        cfg.fluentbit.db_path = "/custom/path/cursor.db".to_string();
+        let yaml = generate_fluentbit_config(&cfg).unwrap();
+        assert!(yaml.contains("db: /custom/path/cursor.db"));
     }
 
     #[test]

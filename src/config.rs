@@ -140,6 +140,7 @@ pub struct FluentbitConfig {
     pub tls: bool,
     pub tls_verify: bool,
     pub config_path: String,
+    pub db_path: String,
     #[serde(default)]
     pub systemd_filter: Option<Vec<String>>,
 }
@@ -153,6 +154,7 @@ impl Default for FluentbitConfig {
             tls: true,
             tls_verify: true,
             config_path: "/etc/fluent-bit.yaml".to_string(),
+            db_path: "/var/lib/fluent-bit/journal.db".to_string(),
             systemd_filter: None,
         }
     }
@@ -569,15 +571,17 @@ impl Config {
                     "fluentbit.config_path must not contain newline characters".to_string(),
                 ));
             }
-            // The bundled fluentbit.service and fluentbit-watcher.path units
-            // hard-code /etc/fluent-bit.yaml; any other value silently breaks
-            // them. Pin the path here until the units are templated.
-            if f.config_path != crate::env::fluentbit_env::FLUENTBIT_CONFIG_PATH {
-                return Err(ConfigError::Validation(format!(
-                    "fluentbit.config_path must be {:?} (the path the bundled systemd units read)",
-                    crate::env::fluentbit_env::FLUENTBIT_CONFIG_PATH,
-                )));
+            if f.db_path.is_empty() {
+                return Err(ConfigError::Validation(
+                    "fluentbit.db_path must not be empty".to_string(),
+                ));
             }
+            if f.db_path.contains('\n') || f.db_path.contains('\r') {
+                return Err(ConfigError::Validation(
+                    "fluentbit.db_path must not contain newline characters".to_string(),
+                ));
+            }
+
             if let Some(filters) = &f.systemd_filter {
                 for entry in filters {
                     if entry.contains('\n') || entry.contains('\r') {
@@ -687,6 +691,7 @@ port = 24224
 tls = true
 tls_verify = true
 config_path = "/etc/fluent-bit.yaml"
+db_path = "/var/lib/fluent-bit/journal.db"
 # systemd_filter placeholder
 "#;
 
@@ -762,6 +767,7 @@ port = 24224
 tls = true
 tls_verify = true
 config_path = "/etc/fluent-bit.yaml"
+db_path = "/var/lib/fluent-bit/journal.db"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.general.debug);
@@ -1118,6 +1124,7 @@ port = 24224
 tls = true
 tls_verify = true
 config_path = "/etc/fluent-bit.yaml"
+db_path = "/var/lib/fluent-bit/journal.db"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
 
@@ -1776,6 +1783,7 @@ enabled = true
         assert!(config.fluentbit.tls);
         assert!(config.fluentbit.tls_verify);
         assert_eq!(config.fluentbit.config_path, "/etc/fluent-bit.yaml");
+        assert_eq!(config.fluentbit.db_path, "/var/lib/fluent-bit/journal.db");
         assert!(config.fluentbit.systemd_filter.is_none());
     }
 
@@ -1847,14 +1855,21 @@ enabled = true
     }
 
     #[test]
-    fn test_fluentbit_enabled_non_canonical_config_path_rejected() {
+    fn test_fluentbit_enabled_empty_db_path_rejected() {
         let mut cfg = test_config();
         cfg.fluentbit.enabled = true;
-        cfg.fluentbit.config_path = "/tmp/fluent-bit.conf".to_string();
+        cfg.fluentbit.db_path = String::new();
         let err = cfg.validate().unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("fluentbit.config_path"));
-        assert!(msg.contains("/etc/fluent-bit.yaml"));
+        assert!(err.to_string().contains("fluentbit.db_path"));
+    }
+
+    #[test]
+    fn test_fluentbit_enabled_newline_db_path_rejected() {
+        let mut cfg = test_config();
+        cfg.fluentbit.enabled = true;
+        cfg.fluentbit.db_path = "/var/lib/fluent-bit/journal.db\nEVIL".to_string();
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("fluentbit.db_path"));
     }
 
     #[test]

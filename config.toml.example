@@ -100,5 +100,6 @@ port = 24224
 tls = true
 tls_verify = true
 config_path = "/etc/fluent-bit.yaml"
+db_path = "/var/lib/fluent-bit/journal.db"
 # Optional list of journald field filters (KEY=VALUE), AND-ed by Fluent Bit.
 # systemd_filter = ["_SYSTEMD_UNIT=unitctl.service", "_SYSTEMD_UNIT=mavlink.service"]

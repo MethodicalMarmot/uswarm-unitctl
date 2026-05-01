@@ -227,22 +227,50 @@
         }
       }
     },
-    "GeneralConfig": {
+    "FluentbitConfig": {
       "type": "object",
       "required": [
-        "debug",
-        "env_dir",
-        "interface"
+        "config_path",
+        "db_path",
+        "enabled",
+        "host",
+        "port",
+        "tls",
+        "tls_verify"
       ],
       "properties": {
-        "debug": {
+        "config_path": {
+          "type": "string"
+        },
+        "db_path": {
+          "type": "string"
+        },
+        "enabled": {
           "type": "boolean"
         },
-        "env_dir": {
+        "host": {
           "type": "string"
         },
-        "interface": {
-          "type": "string"
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "systemd_filter": {
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "tls": {
+          "type": "boolean"
+        },
+        "tls_verify": {
+          "type": "boolean"
         }
       }
     },
@@ -388,10 +416,11 @@
       ]
     },
     "SafeConfig": {
-      "description": "A sanitized view of the full `Config`, safe for MQTT exposure. TLS certificate paths are replaced with `\"***\"`.",
+      "description": "A sanitized view of the full `Config`, safe for MQTT exposure. TLS certificate paths in `general` are replaced with `\"***\"`.",
       "type": "object",
       "required": [
         "camera",
+        "fluentbit",
         "general",
         "mavlink",
         "mqtt",
@@ -401,8 +430,11 @@
         "camera": {
           "$ref": "#/definitions/CameraConfig"
         },
+        "fluentbit": {
+          "$ref": "#/definitions/FluentbitConfig"
+        },
         "general": {
-          "$ref": "#/definitions/GeneralConfig"
+          "$ref": "#/definitions/SafeGeneralConfig"
         },
         "mavlink": {
           "$ref": "#/definitions/MavlinkConfig"
@@ -415,13 +447,48 @@
         }
       }
     },
-    "SafeMqttConfig": {
-      "description": "MQTT config with certificate paths redacted.",
+    "SafeGeneralConfig": {
+      "description": "General config with TLS cert paths redacted.",
       "type": "object",
       "required": [
-        "ca_cert_path",
-        "client_cert_path",
-        "client_key_path",
+        "debug",
+        "env_dir",
+        "interface"
+      ],
+      "properties": {
+        "ca_cert_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_cert_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_key_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "debug": {
+          "type": "boolean"
+        },
+        "env_dir": {
+          "type": "string"
+        },
+        "interface": {
+          "type": "string"
+        }
+      }
+    },
+    "SafeMqttConfig": {
+      "description": "MQTT config (no secrets — cert paths now live in `general`).",
+      "type": "object",
+      "required": [
         "enabled",
         "env_prefix",
         "host",
@@ -429,15 +496,6 @@
         "telemetry_interval_s"
       ],
       "properties": {
-        "ca_cert_path": {
-          "type": "string"
-        },
-        "client_cert_path": {
-          "type": "string"
-        },
-        "client_key_path": {
-          "type": "string"
-        },
         "enabled": {
           "type": "boolean"
         },

@@ -137,7 +137,7 @@ async fn main() {
 
     // MQTT service — only started when mqtt.enabled is true
     if ctx.config.mqtt.enabled {
-        match MqttTransport::new(&ctx.config.mqtt, cancel.clone()) {
+        match MqttTransport::new(&ctx.config, cancel.clone()) {
             Ok(transport) => {
                 let transport = Arc::new(transport);
 

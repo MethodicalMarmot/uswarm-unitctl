@@ -222,7 +222,7 @@ git commit -m "feat(config): add optional TLS cert paths to [general]"
 
 This is the breaking config change. After this commit, any `[mqtt].ca_cert_path` etc. is rejected; consumers read from `[general]`. `MqttTransport::new` gains a `MissingTlsConfig` error variant. `SafeConfig` gains `SafeGeneralConfig` and `SafeMqttConfig` loses cert fields.
 
-- [ ] **Step 1: Write failing test for `MqttTransport::new` rejecting missing cert paths**
+- [x] **Step 1: Write failing test for `MqttTransport::new` rejecting missing cert paths**
 
 In `src/services/mqtt/transport.rs`, replace the existing `test_new_with_invalid_cert_paths` body with:
 
@@ -259,14 +259,14 @@ In `src/services/mqtt/transport.rs`, replace the existing `test_new_with_invalid
     }
 ```
 
-- [ ] **Step 2: Run failing test**
+- [x] **Step 2: Run failing test**
 
 ```bash
 cargo test --lib services::mqtt::transport 2>&1 | tail -20
 ```
 Expected: compile errors (`general` field doesn't exist on `MqttConfig`; `MissingTlsConfig` variant doesn't exist; `MqttTransport::new` takes `&MqttConfig` not `&Config`).
 
-- [ ] **Step 3: Update `TransportError` and `MqttTransport::new` to take `&Config`**
+- [x] **Step 3: Update `TransportError` and `MqttTransport::new` to take `&Config`**
 
 In `src/services/mqtt/transport.rs`:
 
@@ -330,7 +330,7 @@ Update `MqttTransport::new` signature and body (replace the existing `pub fn new
 
 Inside `new`, replace any subsequent reference to `config.host`/`config.port`/`config.env_prefix`/etc. with `mqtt.host`/`mqtt.port`/`mqtt.env_prefix`. (Scan the rest of the function and substitute `config.` with `mqtt.` where it referred to MQTT fields. Do not touch references to `config` if they no longer exist.)
 
-- [ ] **Step 4: Remove cert fields from `MqttConfig`**
+- [x] **Step 4: Remove cert fields from `MqttConfig`**
 
 In `src/config.rs`, replace `MqttConfig`:
 
@@ -380,7 +380,7 @@ In the `mod tests` of `src/config.rs`, replace **all** occurrences of `mqtt.ca_c
 - Same for the inline TOML string in `test_parse_full_config` and `test_sensor_config_full` and `test_mqtt_missing_section_fails`.
 - Update `test_mqtt_config_parsed` body to remove the three `mqtt.*_cert_path` assertions and replace them with assertions on `config.general.{ca,client}_cert_path` / `config.general.client_key_path` matching the values in `FULL_TEST_CONFIG`.
 
-- [ ] **Step 5: Update `SafeConfig` to redact in `general` and drop from `mqtt`**
+- [x] **Step 5: Update `SafeConfig` to redact in `general` and drop from `mqtt`**
 
 In `src/messages/commands.rs`, replace the `SafeConfig` and `SafeMqttConfig` definitions plus their `From` impls (the entire block from `pub struct SafeConfig {` through the end of `impl From<&MqttConfig> for SafeMqttConfig {`) with:
 
@@ -493,7 +493,7 @@ use crate::config::{
 ```
 (it already imports what's needed — confirm `GeneralConfig` is in the list; if not, add it).
 
-- [ ] **Step 6: Update `SafeConfig` tests in `src/messages/commands.rs`**
+- [x] **Step 6: Update `SafeConfig` tests in `src/messages/commands.rs`**
 
 Find and update the existing tests:
 
@@ -541,7 +541,7 @@ let ctx = Context::new(cfg);
 ```
 (replacing the existing `let ctx = Context::new(test_config());` line) and update the assertions to read `config.general.ca_cert_path.as_deref()` etc.
 
-- [ ] **Step 7: Update `MqttTransport` test fixtures referencing the old fields**
+- [x] **Step 7: Update `MqttTransport` test fixtures referencing the old fields**
 
 In `src/services/mqtt/transport.rs`, around line 467–482, the previous `MqttConfig { ca_cert_path, ... }` literal was rewritten in Step 1; confirm it's gone. Search for any remaining `MqttConfig {` literal that names cert fields and remove those fields:
 
@@ -551,7 +551,7 @@ grep -n "MqttConfig {" src/services/mqtt/transport.rs
 
 For every match, remove the three cert lines from the literal.
 
-- [ ] **Step 8: Update `main.rs` `MqttTransport::new` call site**
+- [x] **Step 8: Update `main.rs` `MqttTransport::new` call site**
 
 In `src/main.rs`, replace
 ```rust
@@ -562,7 +562,7 @@ with
 match MqttTransport::new(&ctx.config, cancel.clone()) {
 ```
 
-- [ ] **Step 9: Update `config.toml.example`**
+- [x] **Step 9: Update `config.toml.example`**
 
 In `config.toml.example`, **add** these lines to the `[general]` block (between `env_dir` and the next blank line):
 ```toml
@@ -579,7 +579,7 @@ client_cert_path = "/etc/unitctl/certs/client.pem"
 client_key_path = "/etc/unitctl/certs/client.key"
 ```
 
-- [ ] **Step 10: Build + test**
+- [x] **Step 10: Build + test**
 
 ```bash
 cargo build --release
@@ -587,7 +587,7 @@ cargo test --lib
 ```
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add src/config.rs src/services/mqtt/transport.rs src/messages/commands.rs \

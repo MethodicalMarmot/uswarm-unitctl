@@ -7,6 +7,11 @@ debug = false
 interface = "eth0"
 # Directory for runtime state files (e.g. pending-restart-uuid for self-restart ack)
 env_dir = "/var/run/unitctl"
+# Optional mutual-TLS material consumed by [mqtt] and [fluentbit].
+# Each consumer validates availability independently.
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
 
 [mavlink]
 protocol = "tcpout"
@@ -74,10 +79,6 @@ enabled = true
 enabled = false
 host = "mqtt.example.com"
 port = 8883
-# Mutual TLS certificate paths (node ID extracted from client certificate CN)
-ca_cert_path = "/etc/unitctl/certs/ca.pem"
-client_cert_path = "/etc/unitctl/certs/client.pem"
-client_key_path = "/etc/unitctl/certs/client.key"
 # Environment prefix for MQTT topics (e.g. "prod", "staging")
 env_prefix = "prod"
 # Telemetry publish interval in seconds.

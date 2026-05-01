@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::tls;
-use crate::config::MqttConfig;
+use crate::config::Config;
 use crate::messages::status::{NodeStatusEnvelope, OfflineStatusData, StatusData};
 use crate::Task;
 
@@ -31,6 +31,8 @@ pub enum TransportError {
     Client(#[from] rumqttc::ClientError),
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+    #[error("missing TLS config: {field}")]
+    MissingTlsConfig { field: &'static str },
 }
 
 /// MQTT topic special characters that must not appear in node_id or env_prefix.
@@ -182,20 +184,41 @@ impl MqttTransport {
     /// and creates the rumqttc AsyncClient + EventLoop.
     ///
     /// The event loop is stored internally and consumed by `run_event_loop`.
-    pub fn new(config: &MqttConfig, cancel: CancellationToken) -> Result<Self, TransportError> {
-        let tls_config = tls::load_tls_config(
-            &config.ca_cert_path,
-            &config.client_cert_path,
-            &config.client_key_path,
-        )?;
-        let node_id = tls::extract_node_id(&config.client_cert_path)?;
+    pub fn new(config: &Config, cancel: CancellationToken) -> Result<Self, TransportError> {
+        let mqtt = &config.mqtt;
+        let general = &config.general;
+
+        let ca = general
+            .ca_cert_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or(TransportError::MissingTlsConfig {
+                field: "general.ca_cert_path",
+            })?;
+        let cert = general
+            .client_cert_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or(TransportError::MissingTlsConfig {
+                field: "general.client_cert_path",
+            })?;
+        let key = general
+            .client_key_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or(TransportError::MissingTlsConfig {
+                field: "general.client_key_path",
+            })?;
+
+        let tls_config = tls::load_tls_config(ca, cert, key)?;
+        let node_id = tls::extract_node_id(cert)?;
         validate_topic_segment(&node_id, "node_id (certificate CN)")?;
-        validate_topic_segment(&config.env_prefix, "env_prefix")?;
+        validate_topic_segment(&mqtt.env_prefix, "env_prefix")?;
 
         let session_id = generate_session_id();
 
         // Build the status topic and LWT (offline) payload
-        let status_topic = Self::build_status_topic(&config.env_prefix, &node_id);
+        let status_topic = Self::build_status_topic(&mqtt.env_prefix, &node_id);
         let now = Utc::now();
         let lwt_envelope = NodeStatusEnvelope {
             ts: now,
@@ -208,7 +231,7 @@ impl MqttTransport {
             TransportError::InvalidConfig(format!("failed to serialize LWT payload: {e}"))
         })?;
 
-        let mut mqtt_options = MqttOptions::new(&node_id, &config.host, config.port);
+        let mut mqtt_options = MqttOptions::new(&node_id, &mqtt.host, mqtt.port);
         mqtt_options.set_keep_alive(Duration::from_secs(30));
         mqtt_options.set_transport(Transport::tls_with_config(tls_config));
         mqtt_options.set_clean_session(false);
@@ -225,7 +248,7 @@ impl MqttTransport {
         Ok(Self {
             client,
             node_id,
-            env_prefix: config.env_prefix.clone(),
+            env_prefix: mqtt.env_prefix.clone(),
             session_id,
             event_tx,
             eventloop: Mutex::new(Some(eventloop)),
@@ -466,19 +489,33 @@ mod tests {
 
     #[test]
     fn test_new_with_invalid_cert_paths() {
-        let config = MqttConfig {
-            enabled: true,
-            host: "localhost".to_string(),
-            port: 8883,
-            ca_cert_path: "/nonexistent/ca.pem".to_string(),
-            client_cert_path: "/nonexistent/cert.pem".to_string(),
-            client_key_path: "/nonexistent/key.pem".to_string(),
-            env_prefix: "test".to_string(),
-            telemetry_interval_s: 1.0,
-        };
+        use crate::config::tests::test_config;
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.general.ca_cert_path = Some("/nonexistent/ca.pem".to_string());
+        config.general.client_cert_path = Some("/nonexistent/cert.pem".to_string());
+        config.general.client_key_path = Some("/nonexistent/key.pem".to_string());
 
         let result = MqttTransport::new(&config, CancellationToken::new());
         assert!(matches!(result, Err(TransportError::Tls(_))));
+    }
+
+    #[test]
+    fn test_new_returns_missing_tls_when_general_ca_cert_absent() {
+        use crate::config::tests::test_config;
+        let mut config = test_config();
+        config.mqtt.enabled = true;
+        config.general.ca_cert_path = None;
+        config.general.client_cert_path = Some("/x".to_string());
+        config.general.client_key_path = Some("/y".to_string());
+
+        match MqttTransport::new(&config, CancellationToken::new()) {
+            Err(TransportError::MissingTlsConfig { field }) => {
+                assert_eq!(field, "general.ca_cert_path");
+            }
+            Err(other) => panic!("expected MissingTlsConfig, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
     }
 
     #[test]

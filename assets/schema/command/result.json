@@ -227,25 +227,6 @@
         }
       }
     },
-    "GeneralConfig": {
-      "type": "object",
-      "required": [
-        "debug",
-        "env_dir",
-        "interface"
-      ],
-      "properties": {
-        "debug": {
-          "type": "boolean"
-        },
-        "env_dir": {
-          "type": "string"
-        },
-        "interface": {
-          "type": "string"
-        }
-      }
-    },
     "LteSensorConfig": {
       "type": "object",
       "required": [
@@ -388,7 +369,7 @@
       ]
     },
     "SafeConfig": {
-      "description": "A sanitized view of the full `Config`, safe for MQTT exposure. TLS certificate paths are replaced with `\"***\"`.",
+      "description": "A sanitized view of the full `Config`, safe for MQTT exposure. TLS certificate paths in `general` are replaced with `\"***\"`.",
       "type": "object",
       "required": [
         "camera",
@@ -402,7 +383,7 @@
           "$ref": "#/definitions/CameraConfig"
         },
         "general": {
-          "$ref": "#/definitions/GeneralConfig"
+          "$ref": "#/definitions/SafeGeneralConfig"
         },
         "mavlink": {
           "$ref": "#/definitions/MavlinkConfig"
@@ -415,13 +396,48 @@
         }
       }
     },
-    "SafeMqttConfig": {
-      "description": "MQTT config with certificate paths redacted.",
+    "SafeGeneralConfig": {
+      "description": "General config with TLS cert paths redacted.",
       "type": "object",
       "required": [
-        "ca_cert_path",
-        "client_cert_path",
-        "client_key_path",
+        "debug",
+        "env_dir",
+        "interface"
+      ],
+      "properties": {
+        "ca_cert_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_cert_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_key_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "debug": {
+          "type": "boolean"
+        },
+        "env_dir": {
+          "type": "string"
+        },
+        "interface": {
+          "type": "string"
+        }
+      }
+    },
+    "SafeMqttConfig": {
+      "description": "MQTT config (no secrets — cert paths now live in `general`).",
+      "type": "object",
+      "required": [
         "enabled",
         "env_prefix",
         "host",
@@ -429,15 +445,6 @@
         "telemetry_interval_s"
       ],
       "properties": {
-        "ca_cert_path": {
-          "type": "string"
-        },
-        "client_cert_path": {
-          "type": "string"
-        },
-        "client_key_path": {
-          "type": "string"
-        },
         "enabled": {
           "type": "boolean"
         },

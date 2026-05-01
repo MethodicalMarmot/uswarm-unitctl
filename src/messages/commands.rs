@@ -11,25 +11,33 @@ use crate::config::{
 // ---------------------------------------------------------------------------
 
 /// A sanitized view of the full `Config`, safe for MQTT exposure.
-/// TLS certificate paths are replaced with `"***"`.
+/// TLS certificate paths in `general` are replaced with `"***"`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SafeConfig {
-    pub general: GeneralConfig,
+    pub general: SafeGeneralConfig,
     pub mavlink: MavlinkConfig,
     pub sensors: SensorsConfig,
     pub camera: CameraConfig,
     pub mqtt: SafeMqttConfig,
 }
 
-/// MQTT config with certificate paths redacted.
+/// General config with TLS cert paths redacted.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SafeGeneralConfig {
+    pub debug: bool,
+    pub interface: String,
+    pub env_dir: String,
+    pub ca_cert_path: Option<String>,
+    pub client_cert_path: Option<String>,
+    pub client_key_path: Option<String>,
+}
+
+/// MQTT config (no secrets — cert paths now live in `general`).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SafeMqttConfig {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
-    pub ca_cert_path: String,
-    pub client_cert_path: String,
-    pub client_key_path: String,
     pub env_prefix: String,
     pub telemetry_interval_s: f64,
 }
@@ -37,11 +45,25 @@ pub struct SafeMqttConfig {
 impl From<&Config> for SafeConfig {
     fn from(config: &Config) -> Self {
         Self {
-            general: config.general.clone(),
+            general: SafeGeneralConfig::from(&config.general),
             mavlink: config.mavlink.clone(),
             sensors: config.sensors.clone(),
             camera: config.camera.clone(),
             mqtt: SafeMqttConfig::from(&config.mqtt),
+        }
+    }
+}
+
+impl From<&GeneralConfig> for SafeGeneralConfig {
+    fn from(general: &GeneralConfig) -> Self {
+        let redact = |opt: &Option<String>| opt.as_ref().map(|_| "***".to_string());
+        Self {
+            debug: general.debug,
+            interface: general.interface.clone(),
+            env_dir: general.env_dir.clone(),
+            ca_cert_path: redact(&general.ca_cert_path),
+            client_cert_path: redact(&general.client_cert_path),
+            client_key_path: redact(&general.client_key_path),
         }
     }
 }
@@ -52,9 +74,6 @@ impl From<&MqttConfig> for SafeMqttConfig {
             enabled: mqtt.enabled,
             host: mqtt.host.clone(),
             port: mqtt.port,
-            ca_cert_path: "***".to_string(),
-            client_cert_path: "***".to_string(),
-            client_key_path: "***".to_string(),
             env_prefix: mqtt.env_prefix.clone(),
             telemetry_interval_s: mqtt.telemetry_interval_s,
         }
@@ -245,9 +264,9 @@ mod tests {
         let config = test_config();
         let safe = SafeConfig::from(&config);
 
-        assert_eq!(safe.mqtt.ca_cert_path, "***");
-        assert_eq!(safe.mqtt.client_cert_path, "***");
-        assert_eq!(safe.mqtt.client_key_path, "***");
+        assert_eq!(safe.general.ca_cert_path.as_deref(), Some("***"));
+        assert_eq!(safe.general.client_cert_path.as_deref(), Some("***"));
+        assert_eq!(safe.general.client_key_path.as_deref(), Some("***"));
         // Non-sensitive fields preserved
         assert_eq!(safe.mqtt.host, config.mqtt.host);
         assert_eq!(safe.mqtt.port, config.mqtt.port);
@@ -260,8 +279,21 @@ mod tests {
         let safe = SafeConfig::from(&test_config());
         let json = serde_json::to_string(&safe).unwrap();
         let parsed: SafeConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.mqtt.ca_cert_path, "***");
+        assert_eq!(parsed.general.ca_cert_path.as_deref(), Some("***"));
         assert_eq!(parsed.general.debug, safe.general.debug);
+    }
+
+    #[test]
+    fn test_safe_config_passes_through_none_cert_paths() {
+        use crate::config::tests::test_config;
+        let mut cfg = test_config();
+        cfg.general.ca_cert_path = None;
+        cfg.general.client_cert_path = None;
+        cfg.general.client_key_path = None;
+        let safe: SafeConfig = (&cfg).into();
+        assert!(safe.general.ca_cert_path.is_none());
+        assert!(safe.general.client_cert_path.is_none());
+        assert!(safe.general.client_key_path.is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -423,7 +455,7 @@ mod tests {
         assert!(parsed.error.is_none());
         match parsed.data.unwrap() {
             CommandResultData::GetConfig(ref r) => {
-                assert_eq!(r.config.mqtt.ca_cert_path, "***");
+                assert_eq!(r.config.general.ca_cert_path.as_deref(), Some("***"));
             }
             _ => panic!("expected GetConfig"),
         }

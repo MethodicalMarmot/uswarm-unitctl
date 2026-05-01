@@ -126,9 +126,6 @@ pub struct MqttConfig {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
-    pub ca_cert_path: String,
-    pub client_cert_path: String,
-    pub client_key_path: String,
     pub env_prefix: String,
     pub telemetry_interval_s: f64,
 }
@@ -180,9 +177,6 @@ impl Default for MqttConfig {
             enabled: false,
             host: "mqtt.example.com".to_string(),
             port: 8883,
-            ca_cert_path: "/etc/unitctl/certs/ca.pem".to_string(),
-            client_cert_path: "/etc/unitctl/certs/client.pem".to_string(),
-            client_key_path: "/etc/unitctl/certs/client.key".to_string(),
             env_prefix: "prod".to_string(),
             telemetry_interval_s: 5.0,
         }
@@ -487,21 +481,6 @@ impl Config {
                     "mqtt.port must be greater than 0".to_string(),
                 ));
             }
-            if self.mqtt.ca_cert_path.is_empty() {
-                return Err(ConfigError::Validation(
-                    "mqtt.ca_cert_path must not be empty when MQTT is enabled".to_string(),
-                ));
-            }
-            if self.mqtt.client_cert_path.is_empty() {
-                return Err(ConfigError::Validation(
-                    "mqtt.client_cert_path must not be empty when MQTT is enabled".to_string(),
-                ));
-            }
-            if self.mqtt.client_key_path.is_empty() {
-                return Err(ConfigError::Validation(
-                    "mqtt.client_key_path must not be empty when MQTT is enabled".to_string(),
-                ));
-            }
             if self.mqtt.env_prefix.is_empty() {
                 return Err(ConfigError::Validation(
                     "mqtt.env_prefix must not be empty when MQTT is enabled".to_string(),
@@ -527,6 +506,9 @@ pub mod tests {
 debug = false
 interface = "eth0"
 env_dir = "/var/run/unitctl"
+ca_cert_path = "/etc/unitctl/certs/ca.pem"
+client_cert_path = "/etc/unitctl/certs/client.pem"
+client_key_path = "/etc/unitctl/certs/client.key"
 
 [mavlink]
 protocol = "tcpout"
@@ -578,9 +560,6 @@ enabled = true
 enabled = false
 host = "mqtt.example.com"
 port = 8883
-ca_cert_path = "/etc/unitctl/certs/ca.pem"
-client_cert_path = "/etc/unitctl/certs/client.pem"
-client_key_path = "/etc/unitctl/certs/client.key"
 env_prefix = "test"
 telemetry_interval_s = 1.0
 "#;
@@ -647,9 +626,6 @@ enabled = true
 enabled = false
 host = "mqtt.example.com"
 port = 8883
-ca_cert_path = "/etc/unitctl/certs/ca.pem"
-client_cert_path = "/etc/unitctl/certs/client.pem"
-client_key_path = "/etc/unitctl/certs/client.key"
 env_prefix = "test"
 telemetry_interval_s = 1.0
 "#;
@@ -998,9 +974,6 @@ interval_s = 10.0
 enabled = false
 host = "mqtt.example.com"
 port = 8883
-ca_cert_path = "/etc/unitctl/certs/ca.pem"
-client_cert_path = "/etc/unitctl/certs/client.pem"
-client_key_path = "/etc/unitctl/certs/client.key"
 env_prefix = "test"
 telemetry_interval_s = 1.0
 "#;
@@ -1171,14 +1144,7 @@ telemetry_interval_s = 1.0
 
     #[test]
     fn test_general_cert_paths_parsed_when_present() {
-        // Replace the existing [general] block to include cert paths.
-        let toml_str = FULL_TEST_CONFIG.replace(
-            "env_dir = \"/var/run/unitctl\"",
-            "env_dir = \"/var/run/unitctl\"\nca_cert_path = \"/etc/unitctl/certs/ca.pem\"\n\
-             client_cert_path = \"/etc/unitctl/certs/client.pem\"\n\
-             client_key_path = \"/etc/unitctl/certs/client.key\"",
-        );
-        let config: Config = toml::from_str(&toml_str).expect("parse with cert paths");
+        let config = test_config();
         assert_eq!(
             config.general.ca_cert_path.as_deref(),
             Some("/etc/unitctl/certs/ca.pem")
@@ -1195,7 +1161,11 @@ telemetry_interval_s = 1.0
 
     #[test]
     fn test_general_cert_paths_default_to_none_when_absent() {
-        let config = test_config();
+        let toml_str = FULL_TEST_CONFIG
+            .replace("ca_cert_path = \"/etc/unitctl/certs/ca.pem\"\n", "")
+            .replace("client_cert_path = \"/etc/unitctl/certs/client.pem\"\n", "")
+            .replace("client_key_path = \"/etc/unitctl/certs/client.key\"\n", "");
+        let config: Config = toml::from_str(&toml_str).expect("parse without cert paths");
         assert!(config.general.ca_cert_path.is_none());
         assert!(config.general.client_cert_path.is_none());
         assert!(config.general.client_key_path.is_none());
@@ -1465,14 +1435,20 @@ telemetry_interval_s = 1.0
         assert!(!config.mqtt.enabled);
         assert_eq!(config.mqtt.host, "mqtt.example.com");
         assert_eq!(config.mqtt.port, 8883);
-        assert_eq!(config.mqtt.ca_cert_path, "/etc/unitctl/certs/ca.pem");
-        assert_eq!(
-            config.mqtt.client_cert_path,
-            "/etc/unitctl/certs/client.pem"
-        );
-        assert_eq!(config.mqtt.client_key_path, "/etc/unitctl/certs/client.key");
         assert_eq!(config.mqtt.env_prefix, "test");
         assert_eq!(config.mqtt.telemetry_interval_s, 1.0);
+        assert_eq!(
+            config.general.ca_cert_path.as_deref(),
+            Some("/etc/unitctl/certs/ca.pem")
+        );
+        assert_eq!(
+            config.general.client_cert_path.as_deref(),
+            Some("/etc/unitctl/certs/client.pem")
+        );
+        assert_eq!(
+            config.general.client_key_path.as_deref(),
+            Some("/etc/unitctl/certs/client.key")
+        );
     }
 
     #[test]
@@ -1489,7 +1465,6 @@ telemetry_interval_s = 1.0
         let mut config = test_config();
         config.mqtt.enabled = false;
         config.mqtt.host = "".to_string();
-        config.mqtt.ca_cert_path = "".to_string();
         config.mqtt.port = 0;
         assert!(config.validate().is_ok());
     }
@@ -1510,33 +1485,6 @@ telemetry_interval_s = 1.0
         config.mqtt.port = 0;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("mqtt.port"));
-    }
-
-    #[test]
-    fn test_mqtt_enabled_empty_ca_cert_rejected() {
-        let mut config = test_config();
-        config.mqtt.enabled = true;
-        config.mqtt.ca_cert_path = "".to_string();
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("mqtt.ca_cert_path"));
-    }
-
-    #[test]
-    fn test_mqtt_enabled_empty_client_cert_rejected() {
-        let mut config = test_config();
-        config.mqtt.enabled = true;
-        config.mqtt.client_cert_path = "".to_string();
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("mqtt.client_cert_path"));
-    }
-
-    #[test]
-    fn test_mqtt_enabled_empty_client_key_rejected() {
-        let mut config = test_config();
-        config.mqtt.enabled = true;
-        config.mqtt.client_key_path = "".to_string();
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("mqtt.client_key_path"));
     }
 
     #[test]

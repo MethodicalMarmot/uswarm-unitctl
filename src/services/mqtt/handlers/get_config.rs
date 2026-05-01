@@ -101,10 +101,10 @@ mod tests {
         let handler = GetConfigHandler::new(ctx);
 
         let result = handler.handle(&make_envelope()).await.unwrap();
-        let mqtt = &extract_config(&result).config.mqtt;
-        assert_eq!(mqtt.ca_cert_path, "***");
-        assert_eq!(mqtt.client_cert_path, "***");
-        assert_eq!(mqtt.client_key_path, "***");
+        let general = &extract_config(&result).config.general;
+        assert_eq!(general.ca_cert_path.as_deref(), Some("***"));
+        assert_eq!(general.client_cert_path.as_deref(), Some("***"));
+        assert_eq!(general.client_key_path.as_deref(), Some("***"));
     }
 
     #[tokio::test]
@@ -114,9 +114,9 @@ mod tests {
 
         let result = handler.handle(&make_envelope()).await.unwrap();
         let config = &extract_config(&result).config;
-        assert_eq!(config.mqtt.ca_cert_path, "***");
-        assert_eq!(config.mqtt.client_cert_path, "***");
-        assert_eq!(config.mqtt.client_key_path, "***");
+        assert_eq!(config.general.ca_cert_path.as_deref(), Some("***"));
+        assert_eq!(config.general.client_cert_path.as_deref(), Some("***"));
+        assert_eq!(config.general.client_key_path.as_deref(), Some("***"));
     }
 
     #[tokio::test]

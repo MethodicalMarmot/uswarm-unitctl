@@ -15,43 +15,18 @@ pub fn generate_fluentbit_config(config: &Config) -> Result<String, FluentbitGen
     let f = &config.fluentbit;
     let g = &config.general;
 
-    let mut out = String::new();
-    out.push_str("service:\n");
-    out.push_str("  flush: 1\n");
-    out.push_str("  log_level: info\n");
-    out.push('\n');
-    out.push_str("pipeline:\n");
-    out.push_str("  inputs:\n");
-    out.push_str("    - name: systemd\n");
-    out.push_str("      tag: host.*\n");
-    out.push_str("      read_from_tail: off\n");
-    // Persist journal cursor across restarts; without `db`, Fluent Bit replays
-    // the entire journal every time the watcher restarts the service.
-    out.push_str(&format!("      db: {}\n", f.db_path));
-    if let Some(filters) = &f.systemd_filter {
-        if !filters.is_empty() {
-            out.push_str("      systemd_filter:\n");
-            for entry in filters {
-                out.push_str("        - \"");
-                for c in entry.chars() {
-                    match c {
-                        '\\' => out.push_str("\\\\"),
-                        '"' => out.push_str("\\\""),
-                        _ => out.push(c),
-                    }
-                }
-                out.push_str("\"\n");
-            }
+    let filter_block = match f.systemd_filter.as_deref() {
+        Some(filters) if !filters.is_empty() => {
+            let entries: String = filters
+                .iter()
+                .map(|e| format!("        - \"{}\"\n", escape_yaml_double_quoted(e)))
+                .collect();
+            format!("      systemd_filter:\n{entries}")
         }
-    }
-    out.push('\n');
-    out.push_str("  outputs:\n");
-    out.push_str("    - name: forward\n");
-    out.push_str("      match: '*'\n");
-    out.push_str(&format!("      host: {}\n", f.host));
-    out.push_str(&format!("      port: {}\n", f.port));
+        _ => String::new(),
+    };
 
-    if f.tls {
+    let tls_block = if f.tls {
         let ca = g
             .ca_cert_path
             .as_deref()
@@ -67,18 +42,55 @@ pub fn generate_fluentbit_config(config: &Config) -> Result<String, FluentbitGen
             .as_deref()
             .filter(|s| !s.is_empty())
             .ok_or(FluentbitGenError::MissingCert("general.client_key_path"))?;
+        let tls_verify = if f.tls_verify { "on" } else { "off" };
+        format!(
+"      tls: on
+      tls.verify: {tls_verify}
+      tls.ca_file: {ca}
+      tls.crt_file: {cert}
+      tls.key_file: {key}
+"
+        )
+    } else {
+        String::new()
+    };
 
-        out.push_str("      tls: on\n");
-        out.push_str(&format!(
-            "      tls.verify: {}\n",
-            if f.tls_verify { "on" } else { "off" }
-        ));
-        out.push_str(&format!("      tls.ca_file: {ca}\n"));
-        out.push_str(&format!("      tls.crt_file: {cert}\n"));
-        out.push_str(&format!("      tls.key_file: {key}\n"));
+    // `db` persists the journal cursor across restarts; without it, Fluent Bit
+    // replays the entire journal every time the watcher restarts the service.
+    let db_path = &f.db_path;
+    let host = &f.host;
+    let port = f.port;
+    Ok(format!(
+"service:
+  flush: 1
+  log_level: info
+
+pipeline:
+  inputs:
+    - name: systemd
+      tag: host.*
+      read_from_tail: off
+      db: {db_path}
+{filter_block}
+  outputs:
+    - name: forward
+      match: '*'
+      host: {host}
+      port: {port}
+{tls_block}"
+    ))
+}
+
+fn escape_yaml_double_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
     }
-
-    Ok(out)
+    out
 }
 
 #[derive(Debug, thiserror::Error)]

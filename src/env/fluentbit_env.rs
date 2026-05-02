@@ -72,6 +72,27 @@ pipeline:
       read_from_tail: off
       db: {db_path}
 {filter_block}
+  filters:
+    - name: modify
+      match: '*'
+      Remove:
+        - SYSLOG_FACILITY
+        - PRIORITY
+        - _CAP_EFFECTIVE
+        - _TRANSPORT
+        - _STREAM_ID
+        - _SYSTEMD_CGROUP
+        - _SYSTEMD_INVOCATION_ID
+        - SYSLOG_IDENTIFIER
+    - name: lua
+      match: '*'
+      call: append_time
+      code:  |
+        function append_time(tag, timestamp, record)
+          new_record = record
+          new_record[\"timestamp\"] = timestamp
+          return 1, timestamp, new_record
+        end
   outputs:
     - name: forward
       match: '*'
